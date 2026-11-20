@@ -709,6 +709,7 @@ function renderShell(){
       <button class="nav-btn" data-page="jobreg"><span class="ic">📋</span> Jobs</button>
       <button class="nav-btn" data-page="poreg"><span class="ic">🧾</span> Purchase orders</button>
       <button class="nav-btn" data-page="labour"><span class="ic">👷</span> Labour &amp; rates</button>
+      <button class="nav-btn" data-page="xero"><span class="ic">🔄</span> Send to Xero</button>
       <button class="nav-btn" data-page="jobs"><span class="ic">🚦</span> Job Status</button>
       <button class="nav-btn" data-page="engineers"><span class="ic">👷</span> Engineers</button>
       <button class="nav-btn" data-page="compliance"><span class="ic">🛡</span> Compliance</button>
@@ -5034,6 +5035,7 @@ function go(page){
     else if(page==='poreg')html=pagePOs();
     else if(page==='labour')html=pageLabour();
     else if(page==='commercial')html=pageCommercial();
+    else if(page==='xero')html=pageXero();
     else if(!CLIENT){ html=emptyState('👈','Choose a client','Pick a client from the dropdown above'+(PROFILE.role==='admin'?', the Clients page or HQ':'')+' to open their dashboard.'); }
     else if(page==='command')html=pageCommand();
     else if(page==='checkins')html=pageCheckins();
@@ -7096,6 +7098,232 @@ function reopenJobAfter(jobId,text){ closeForm(); openJobForm(jobId); setTimeout
 async function loadBillingSummary(){
   if(!jobCan('jobs.view')) return [];
   return jobFetchAll(()=>sb.from('job_billing_stages').select('id,job_id,label,stage_type,amount,status,xero_invoice_no,invoice_date,invoiced_amount,payment_status'));
+}
+/* ===================================================================
+   SEND TO XERO  —  Phase 5a.
+   Everything waiting to go to Xero (customer invoices as drafts, POs,
+   supplier invoices as draft bills, and POs to mark as Billed) is listed
+   here. Accounts check each item and send only what they tick; nothing
+   goes automatically. Items with a problem cannot be ticked.
+   Until the Xero connection is approved (Phase 5b), ticked items wait in
+   the queue.
+   =================================================================== */
+
+let XO=null, XO_ERR=null, XO_LOADING=false, XO_TAB='check', XO_SEL=new Set(), XO_ENT='UK';
+TITLES.xero='Send to Xero';
+
+const XO_TYPES=[['invoice','Customer invoices','Sent as draft sales invoices for you to approve in Xero'],
+  ['purchase_order','Purchase orders','So accounts can see every PO in Xero'],
+  ['bill','Supplier invoices → draft bills','Entered against POs; sent as draft bills'],
+  ['po_billed','POs to mark as Billed','Fully invoiced here; marks Xero’s copy as Billed']];
+const XO_STATUS={queued:['Queued','cyan'],sending:['Sending','cyan'],sent:['In Xero','green'],failed:['Failed','red'],withdrawn:['Taken back','grey'],in_xero:['Already in Xero','violet']};
+const xoKey=(t,id)=>t+'|'+id;
+function xoUser(id){ const l=(LOGINS||[]).find(x=>x.id===id); return l?l.email:''; }
+function xoSettings(e){ return (XO&&XO.settings||[]).find(s=>s.entity_code===(e||XO_ENT))||{}; }
+function xoConnected(e){ return !!xoSettings(e).connected_at; }
+
+async function loadXero(){
+  if(XO_LOADING) return; XO_LOADING=true; XO_ERR=null;
+  try{
+    await poEnsurePerms();
+    if(!JOBREG_ENTITIES.length){ const e=await sb.from('trading_entities').select('*').order('code'); JOBREG_ENTITIES=e.data||[]; }
+    const [outbox,items,links,settings,sups,codes]=await Promise.all([
+      jobFetchAll(()=>sb.from('xero_outbox').select('*').order('item_date')),
+      jobFetchAll(()=>sb.from('xero_sync_items').select('id,entity_code,item_type,source_id,job_id,ref,party_name,amount,currency,status,queued_at,queued_by,sent_at,xero_number,error,reason,closed_at,closed_by').order('queued_at',{ascending:false})),
+      jobFetchAll(()=>sb.from('xero_contact_links').select('*')),
+      sb.from('xero_settings').select('*').order('entity_code').then(r=>{ if(r.error) throw r.error; return r.data||[]; }),
+      jobFetchAll(()=>sb.from('suppliers').select('id,name,status').order('name')),
+      sb.from('cost_codes').select('*').order('sort_order').then(r=>r.data||[])]);
+    XO={outbox,items,links,settings,sups,codes};
+    const live=new Set(outbox.map(o=>xoKey(o.item_type,o.source_id))); XO_SEL=new Set([...XO_SEL].filter(k=>live.has(k)));
+  }catch(e){ XO_ERR=e.message||String(e); XO=null; }
+  XO_LOADING=false;
+  if(CURRENT==='xero') go('xero');
+}
+function xoReload(){ XO=null; XO_SEL.clear(); go('xero'); }
+
+function pageXero(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','Only visible to the Mercury team.');
+  if(MYPERMS!==null && !jobCan('xero.send') && !jobCan('xero.settings')) return emptyState('🔒','Accounts only','You don’t have permission to send to Xero.');
+  if(XO===null){ if(XO_ERR) return emptyState('⚠','Could not load', esc(XO_ERR)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="XO_ERR=null;xoReload()">Try again</button></div>`); loadXero(); return emptyState('⏳','Loading…','One moment.'); }
+  const on=XO.settings.filter(s=>s.enabled);
+  const conn=on.length?on.map(s=>s.connected_at?`<span class="chip green">${esc(s.entity_code)}: connected${s.tenant_name?' to '+esc(s.tenant_name):''}</span>`:`<span class="chip amber" title="Someone with admin access to this Xero organisation needs to approve the connection">${esc(s.entity_code)}: not connected yet</span>`).join(' '):'<span class="chip grey">No company switched on</span>';
+  const queued=XO.items.filter(i=>['queued','sending','failed'].includes(i.status)).length;
+  const tab=(k,l,n)=>`<button class="${XO_TAB===k?'btn':'btn-ghost'}" style="width:auto;padding:7px 14px" onclick="XO_TAB='${k}';go('xero')">${l}${n?` <span class="nav-badge" style="position:static;margin-left:4px">${n}</span>`:''}</button>`;
+  const head=`<div class="sechead"><h3>🔄 Send to Xero</h3><span class="sub">Check each item, tick it, then send. Nothing goes to Xero automatically.</span><span class="line"></span><button class="btn-ghost" onclick="xoReload()">Refresh</button></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${conn}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${tab('check','To check',XO.outbox.length)}${tab('queue','Queued',queued)}${tab('done','Sent & history')}${tab('contacts','Xero contacts')}${tab('settings','Settings')}</div>`;
+  let body='';
+  if(XO_TAB==='check') body=xoCheckHtml(); else if(XO_TAB==='queue') body=xoQueueHtml(false);
+  else if(XO_TAB==='done') body=xoQueueHtml(true); else if(XO_TAB==='contacts') body=xoContactsHtml(); else body=xoSettingsHtml();
+  return head+body;
+}
+
+/* ---------- To check ---------- */
+function xoCheckHtml(){
+  if(!XO.outbox.length) return `<div class="card" style="padding:18px">${emptyState('✅','Nothing waiting','New POs, supplier invoices and billing stages marked ready will appear here.')}</div>`;
+  const can=jobCan('xero.send');
+  const sec=XO_TYPES.map(([t,title,sub])=>{
+    const rows=XO.outbox.filter(o=>o.item_type===t); if(!rows.length) return '';
+    const sendable=rows.filter(o=>o.can_send);
+    const allOn=sendable.length&&sendable.every(o=>XO_SEL.has(xoKey(o.item_type,o.source_id)));
+    const tr=rows.map(o=>{ const k=xoKey(o.item_type,o.source_id), probs=o.problems||[], warns=o.warnings||[];
+      const link=probs.some(p=>/not linked to a Xero contact/.test(p))&&can?` <button class="btn-ghost" style="padding:2px 8px;font-size:12px" onclick="xoLinkForm('${o.entity_code}','${o.party_type}','${o.party_id}')">Link…</button>`:'';
+      return `<tr style="${o.can_send?'':'background:var(--red-soft)'}"><td style="width:28px">${can?`<input type="checkbox" class="xo_chk" style="width:auto" data-k="${k}" ${o.can_send?'':'disabled'} ${XO_SEL.has(k)?'checked':''} onchange="xoTick(this)">`:''}</td>
+        <td style="white-space:nowrap"><b>${esc(o.ref)}</b><div class="muted" style="font-size:11.5px">${esc(o.job_ref||'')} · ${esc(o.entity_code)}</div></td>
+        <td>${esc(o.party_name||'—')}<div class="muted" style="font-size:11.5px">${o.xero_contact?'Xero: '+esc(o.xero_contact):''}</div></td>
+        <td>${jobDate(o.item_date)}</td><td style="text-align:right;white-space:nowrap">${t==='po_billed'?'':jobMoney(o.amount,o.currency)}</td>
+        <td style="font-size:12px">${probs.map(p=>`<div style="color:var(--red)">✕ ${esc(p)}</div>`).join('')}${link}${warns.map(w=>`<div style="color:var(--amber)">! ${esc(w)}</div>`).join('')}</td>
+        <td style="white-space:nowrap;text-align:right"><button class="btn-ghost" style="padding:4px 8px" onclick="xoPreview('${t}','${o.source_id}')">View</button>${can?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoMarkInXero('${t}','${o.source_id}','${esc(o.ref).replace(/'/g,'')}')">Already in Xero</button>`:''}</td></tr>`; }).join('');
+    return `<div class="card" style="padding:10px 12px;margin-bottom:14px;overflow-x:auto"><div style="display:flex;gap:10px;align-items:center;margin-bottom:6px"><div style="flex:1"><b>${title}</b> <span class="muted" style="font-size:12px">· ${sub}</span></div>
+        ${can&&sendable.length?`<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" style="width:auto" ${allOn?'checked':''} onchange="xoTickAll('${t}',this.checked)"> Tick all ready (${sendable.length})</label>`:''}</div>
+      <table class="tbl xo_tbl" data-type="${t}"><thead><tr><th></th><th>Reference</th><th>Contact</th><th>Date</th><th style="text-align:right">Net</th><th>Checks</th><th></th></tr></thead><tbody>${tr}</tbody></table></div>`; }).join('');
+  const n=XO_SEL.size;
+  return sec+(can?`<div class="card" style="padding:12px 14px;position:sticky;bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;box-shadow:0 6px 24px rgba(0,0,0,.35)">
+      <div style="flex:1" id="xoSelText">${n?`<b>${n}</b> item${n===1?'':'s'} ticked`:'Tick the items you have checked.'}</div>
+      <button class="btn" id="xoReview" style="width:auto;padding:9px 22px" ${n?'':'disabled'} onclick="xoReview()">Review &amp; send…</button></div>`:'');
+}
+function xoTick(cb){ cb.checked?XO_SEL.add(cb.dataset.k):XO_SEL.delete(cb.dataset.k); const n=XO_SEL.size;
+  el('xoSelText').innerHTML=n?`<b>${n}</b> item${n===1?'':'s'} ticked`:'Tick the items you have checked.'; el('xoReview').disabled=!n; }
+function xoTickAll(t,on){ XO.outbox.filter(o=>o.item_type===t&&o.can_send).forEach(o=>{ const k=xoKey(t,o.source_id); on?XO_SEL.add(k):XO_SEL.delete(k); }); go('xero'); }
+
+async function xoPreview(t,id){
+  const r=await sb.rpc('xero_item_preview',{p_type:t,p_id:id});
+  if(r.error){ alert('Could not load: '+poFriendlyError(r.error)); return; }
+  const k=r.data, p=k.payload||{}, cur=k.currency, lines=p.LineItems||[];
+  const row=(l,v)=>v==null||v===''?'':`<tr><td class="muted" style="width:170px">${l}</td><td>${esc(String(v))}</td></tr>`;
+  const kind={invoice:'Draft sales invoice',purchase_order:'Purchase order',bill:'Draft bill',po_billed:'Mark PO as Billed'}[t];
+  const tot=lines.reduce((a,l)=>a+Number(l.Quantity||1)*Number(l.UnitAmount||0),0);
+  billModal('xoPrev',`${kind} · ${esc(k.ref)}`,
+    `${(k.problems||[]).map(x=>`<div style="color:var(--red);font-size:13px">✕ ${esc(x)}</div>`).join('')}${(k.warnings||[]).map(x=>`<div style="color:var(--amber);font-size:13px">! ${esc(x)}</div>`).join('')}
+     <table class="tbl" style="margin:8px 0">${row('Xero contact',p.Contact?(p.Contact.Name||'')+(p.Contact.ContactID?'':(k.xero_contact==='(new contact)'?' (new)':'')):'')}${row('Number',p.InvoiceNumber||p.PurchaseOrderNumber)}${row('Date',p.Date&&jobDate(p.Date))}${row('Due date',p.DueDate&&jobDate(p.DueDate))}${row('Delivery date',p.DeliveryDate&&jobDate(p.DeliveryDate))}${row('Reference',p.Reference)}${row('Currency',p.CurrencyCode)}${row('Status in Xero',p.Status)}${row('Amounts are','excluding VAT — Xero adds VAT from the tax rate')}</table>
+     ${lines.length?`<table class="tbl"><thead><tr><th>Description</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit</th><th>Account</th><th>Tax rate</th></tr></thead><tbody>${lines.map(l=>`<tr><td style="white-space:pre-line">${esc(l.Description)}</td><td style="text-align:right">${esc(l.Quantity)}</td><td style="text-align:right">${jobMoney(l.UnitAmount,cur)}</td><td>${esc(l.AccountCode||'')}</td><td>${esc(l.TaxType||'')}${l.Tracking?'<div class="muted" style="font-size:11px">'+esc(l.Tracking.map(x=>x.Name+': '+x.Option).join(', '))+'</div>':''}</td></tr>`).join('')}
+       <tr><td colspan="2"><b>Net total</b></td><td style="text-align:right"><b>${jobMoney(tot,cur)}</b></td><td colspan="2"></td></tr></tbody></table>`:''}`,
+    `<button class="btn-ghost" onclick="el('xoPrev').remove()">Close</button>`, 760);
+}
+async function xoMarkInXero(t,id,ref){
+  const reason=prompt(`Take ${ref} off the list because it is already in Xero (keyed in by hand)?\n\nNote (e.g. "entered by hand on 18/11"):`); if(reason===null) return;
+  if(!reason.trim()){ alert('A note is needed.'); return; }
+  const no=prompt('Xero number, if you have it (optional):','');
+  const r=await sb.rpc('xero_mark_in_xero',{p_type:t,p_id:id,p_reason:reason.trim(),p_xero_number:no||null});
+  if(r.error){ alert('Not saved: '+poFriendlyError(r.error)); return; }
+  xoReload();
+}
+function xoReview(){
+  const sel=XO.outbox.filter(o=>XO_SEL.has(xoKey(o.item_type,o.source_id)));
+  const by=XO_TYPES.map(([t,title])=>{ const r=sel.filter(o=>o.item_type===t); if(!r.length) return '';
+    return `<div style="margin-bottom:10px"><b>${title}</b> — ${r.length} · ${t==='po_billed'?'':sumByCur(r,'amount')}<div style="font-size:12.5px">${r.map(o=>`<div>${esc(o.ref)} · ${esc(o.party_name||'')}${t==='po_billed'?'':' · '+jobMoney(o.amount,o.currency)}${(o.warnings||[]).length?' <span style="color:var(--amber)">('+(o.warnings||[]).length+' warning'+((o.warnings||[]).length>1?'s':'')+')</span>':''}</div>`).join('')}</div></div>`; }).join('');
+  const notConn=[...new Set(sel.map(o=>o.entity_code))].filter(e=>!xoConnected(e));
+  billModal('xoSend',`Send ${sel.length} item${sel.length===1?'':'s'} to Xero`,
+    `${by}${notConn.length?`<div class="box" style="background:var(--amber-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin:6px 0">Xero is not connected yet for ${esc(notConn.join(', '))}. These items will wait in the queue and go across once the connection is approved. You can take any back until then.</div>`:''}
+     <label style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;margin-top:8px"><input type="checkbox" id="xo_ok" style="width:auto;margin-top:3px" onchange="el('xoGo').disabled=!this.checked"> I have checked the contacts, amounts, references and VAT on these items.</label>`,
+    `<button class="btn-ghost" onclick="el('xoSend').remove()">Cancel</button><button class="btn" id="xoGo" disabled onclick="xoSendNow()">Send</button>`, 640);
+}
+async function xoSendNow(){
+  const items=XO.outbox.filter(o=>XO_SEL.has(xoKey(o.item_type,o.source_id))).map(o=>({type:o.item_type,id:o.source_id}));
+  el('xoGo').disabled=true; billSay('xoSend','Sending…');
+  const r=await sb.rpc('xero_queue',{p_items:items});
+  if(r.error){ el('xoGo').disabled=false; return billSay('xoSend','Not sent: '+poFriendlyError(r.error)); }
+  el('xoSend').remove(); XO_TAB='queue'; xoReload(); setTimeout(()=>{ const m=el('content'); if(m) m.insertAdjacentHTML('afterbegin',`<div class="box" id="xoDone" style="background:var(--green-soft);border-radius:10px;padding:10px 12px;margin-bottom:10px">✓ ${r.data} item${r.data===1?'':'s'} queued for Xero.</div>`); },900);
+}
+
+/* ---------- Queue and history ---------- */
+function xoQueueHtml(history){
+  const rows=XO.items.filter(i=>history?['sent','withdrawn','in_xero'].includes(i.status):['queued','sending','failed'].includes(i.status));
+  if(!rows.length) return `<div class="card" style="padding:18px">${emptyState(history?'🗂':'📭',history?'Nothing yet':'Queue is empty',history?'Items sent to Xero, taken back or marked as already in Xero appear here.':'Ticked items wait here until they are sent.')}</div>`;
+  const type=t=>(XO_TYPES.find(x=>x[0]===t)||[t,t])[1];
+  const can=jobCan('xero.send');
+  return `<div class="card" style="padding:8px 10px;overflow-x:auto"><table class="tbl"><thead><tr><th>Reference</th><th>Type</th><th>Contact</th><th style="text-align:right">Net</th><th>Status</th><th>Who / when</th><th></th></tr></thead><tbody>${rows.map(i=>{
+      const s=XO_STATUS[i.status]||[i.status,'grey'];
+      const wait=i.status==='queued'&&!xoConnected(i.entity_code)?'<div class="muted" style="font-size:11.5px">Waiting for the Xero connection</div>':'';
+      return `<tr><td><b>${esc(i.ref)}</b><div class="muted" style="font-size:11.5px">${esc(i.entity_code)}</div></td><td style="font-size:12.5px">${esc(type(i.item_type))}</td><td>${esc(i.party_name||'')}</td>
+        <td style="text-align:right">${i.item_type==='po_billed'?'':jobMoney(i.amount,i.currency)}</td><td><span class="chip ${s[1]}">${s[0]}</span>${wait}${i.xero_number?`<div style="font-size:12px">Xero ${esc(i.xero_number)}</div>`:''}${i.error?`<div style="color:var(--red);font-size:12px">${esc(i.error)}</div>`:''}${i.reason?`<div class="muted" style="font-size:12px">${esc(i.reason)}</div>`:''}</td>
+        <td style="font-size:12px">${esc(xoUser(i.queued_by))}<div class="muted">${jobDate(i.queued_at)}${i.closed_at?' → '+jobDate(i.closed_at)+' '+esc(xoUser(i.closed_by)):''}</div></td>
+        <td>${can&&['queued','failed','in_xero'].includes(i.status)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoWithdraw('${i.id}','${i.status}')">${i.status==='in_xero'?'Undo':'Take back'}</button>`:''}</td></tr>`; }).join('')}</tbody></table></div>`;
+}
+async function xoWithdraw(id,st){
+  const reason=prompt(st==='in_xero'?'Put this item back on the check list?\n\nReason:':'Take this item back? It returns to the check list.\n\nReason:'); if(reason===null) return;
+  if(!reason.trim()){ alert('A reason is needed.'); return; }
+  const r=await sb.rpc('xero_withdraw',{p_item:id,p_reason:reason.trim()});
+  if(r.error){ alert('Not saved: '+poFriendlyError(r.error)); return; }
+  xoReload();
+}
+
+/* ---------- Xero contacts ---------- */
+function xoLink(e,t,id){ return (XO.links||[]).find(l=>l.entity_code===e&&l.party_type===t&&l.party_id===id); }
+function xoContactsHtml(){
+  const ents=XO.settings.filter(s=>s.enabled).map(s=>s.entity_code); if(!ents.length) return `<div class="card" style="padding:18px">${emptyState('⚙','No company switched on','Switch a company on in Settings first.')}</div>`;
+  if(!ents.includes(XO_ENT)) XO_ENT=ents[0];
+  const can=jobCan('xero.send');
+  const list=(t,arr)=>arr.map(p=>{ const l=xoLink(XO_ENT,t,p.id);
+    return `<tr><td>${esc(p.name)}</td><td>${l?(l.link_mode==='create'?'<span class="chip amber">New contact in Xero</span>':`<span class="chip green">Linked</span> ${esc(l.xero_contact_name)}`):'<span class="chip grey">Not linked</span>'}</td>
+      <td style="text-align:right">${can?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoLinkForm('${XO_ENT}','${t}','${p.id}')">${l?'Change':'Link…'}</button>`:''}</td></tr>`; }).join('');
+  const clients=(CLIENTS||[]).slice().sort((a,b)=>a.name.localeCompare(b.name)), sups=(XO.sups||[]).filter(s=>(s.status||'Active')!=='Inactive');
+  return `<div class="card fld" style="padding:10px 12px;margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      ${ents.length>1?`<select style="width:auto" onchange="XO_ENT=this.value;go('xero')">${ents.map(e=>`<option ${e===XO_ENT?'selected':''}>${e}</option>`).join('')}</select>`:`<b>${esc(XO_ENT)} Xero</b>`}
+      <span class="muted" style="font-size:12.5px">Link each client and supplier to its contact in Xero, using the name exactly as it appears in Xero. Once connected, the names are matched automatically and you will pick from Xero’s list.</span></div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px">
+      <div class="card" style="padding:8px 10px"><div style="font-weight:700;margin:4px">Clients</div><table class="tbl"><tbody>${list('client',clients)||'<tr><td class="muted">No clients</td></tr>'}</tbody></table></div>
+      <div class="card" style="padding:8px 10px"><div style="font-weight:700;margin:4px">Suppliers</div><table class="tbl"><tbody>${list('supplier',sups)||'<tr><td class="muted">No suppliers</td></tr>'}</tbody></table></div></div>`;
+}
+function xoLinkForm(e,t,id){
+  const name=t==='client'?((CLIENTS||[]).find(c=>c.id===id)||{}).name:((XO.sups||[]).find(s=>s.id===id)||{}).name;
+  const l=xoLink(e,t,id)||{link_mode:'existing',xero_contact_name:name||''};
+  billModal('xoLinkM',`Xero contact · ${esc(name||'')}`,
+    `<label style="display:flex;gap:8px;align-items:center;font-size:13.5px;margin-bottom:6px"><input type="radio" name="xl_mode" value="existing" style="width:auto" ${l.link_mode!=='create'?'checked':''}> Already in ${esc(e)} Xero, named:</label>
+     <div class="fld"><input id="xl_name" value="${esc(l.xero_contact_name||'')}" placeholder="Name exactly as in Xero"></div>
+     <label style="display:flex;gap:8px;align-items:center;font-size:13.5px"><input type="radio" name="xl_mode" value="create" style="width:auto" ${l.link_mode==='create'?'checked':''}> Not in Xero yet — create it as “${esc(name||'')}” when first sent</label>`,
+    `${l.id?`<button class="btn-ghost" style="color:var(--red)" onclick="xoUnlink('${l.id}')">Remove link</button>`:''}<button class="btn-ghost" onclick="el('xoLinkM').remove()">Cancel</button><button class="btn" onclick="xoLinkSave('${e}','${t}','${id}')">Save</button>`);
+}
+async function xoLinkSave(e,t,id){
+  const mode=document.querySelector('input[name="xl_mode"]:checked').value, nm=el('xl_name').value.trim();
+  if(mode==='existing'&&!nm) return billSay('xoLinkM','Enter the contact’s name as it appears in Xero.');
+  const row={entity_code:e, party_type:t, party_id:id, link_mode:mode, xero_contact_name:mode==='existing'?nm:null, updated_at:new Date().toISOString()};
+  const ex=xoLink(e,t,id);
+  const r=ex?await sb.from('xero_contact_links').update(row).eq('id',ex.id).select():await sb.from('xero_contact_links').insert(row).select();
+  if(r.error||!r.data||!r.data.length) return billSay('xoLinkM','Not saved: '+(r.error?poFriendlyError(r.error):'no permission'));
+  el('xoLinkM').remove(); const keep=XO_SEL; XO=null; go('xero'); XO_SEL=keep;
+}
+async function xoUnlink(id){
+  if(!confirm('Remove this link? Items for this contact will be blocked until it is linked again.')) return;
+  const r=await sb.from('xero_contact_links').delete().eq('id',id).select();
+  if(r.error) return billSay('xoLinkM','Not removed: '+poFriendlyError(r.error));
+  el('xoLinkM').remove(); xoReload();
+}
+
+/* ---------- Settings ---------- */
+function xoSettingsHtml(){
+  const ed=jobCan('xero.settings'), dis=ed?'':'disabled', codeEd=jobCan('cost_codes.manage');
+  const ent=e=>{ const x=JOBREG_ENTITIES.find(t=>t.code===e)||{}; return esc(e+' — '+(x.legal_name||'')); };
+  const f=(s,k,l,type,ph)=>`<div class="fld"><label>${l}</label><input id="xs_${s.entity_code}_${k}" ${dis} ${type?`type="${type}"`:''} value="${esc(s[k]??'')}" placeholder="${ph||''}"></div>`;
+  const cards=XO.settings.map(s=>`<div class="card" style="padding:12px 14px;margin-bottom:12px">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px"><b style="flex:1">${ent(s.entity_code)}</b>
+        <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="xs_${s.entity_code}_enabled" style="width:auto" ${s.enabled?'checked':''} ${dis}> Switched on</label></div>
+      <div style="font-size:12.5px;margin-bottom:8px">${s.connected_at?`Connected to <b>${esc(s.tenant_name||'Xero')}</b> on ${jobDate(s.connected_at)}`:'Not connected yet — the connection is approved by someone with admin access to this company’s Xero organisation.'}</div>
+      <div class="frow">${f(s,'start_date','Send from (items before this date are not listed)','date')}${f(s,'tracking_category','Tracking category for the job ref (optional)','','e.g. Job')}</div>
+      <div class="frow">${f(s,'sales_account_code','Sales account code','','e.g. 200')}${f(s,'sales_tax_type','Sales tax rate (Xero code)','','e.g. OUTPUT2')}${f(s,'invoice_due_days','Invoice due (days)','number')}</div>
+      <div class="frow">${f(s,'purchases_account_code','Default purchases account code','','e.g. 310')}${f(s,'purchase_tax_type','Purchases tax rate (Xero code)','','e.g. INPUT2')}${f(s,'bill_due_days','Bill due (days)','number')}</div>
+      ${ed?`<div style="text-align:right"><button class="btn" onclick="xoSaveSettings('${s.entity_code}')">Save ${esc(s.entity_code)}</button></div>`:''}</div>`).join('');
+  const codes=`<div class="card" style="padding:12px 14px"><div style="font-weight:700;margin-bottom:4px">Xero account per cost code</div><div class="muted" style="font-size:12.5px;margin-bottom:8px">Leave blank to use the company’s default purchases account.</div>
+    <table class="tbl"><tbody>${(XO.codes||[]).map(c=>`<tr><td style="width:90px"><b>${esc(c.code)}</b></td><td>${esc(c.name)}</td><td style="width:160px"><input id="xc_${esc(c.code)}" value="${esc(c.xero_account_code||'')}" ${codeEd?'':'disabled'} placeholder="default"></td></tr>`).join('')}</tbody></table>
+    ${codeEd?`<div style="text-align:right;margin-top:8px"><button class="btn" onclick="xoSaveCodes()">Save account codes</button></div>`:''}</div>`;
+  return `<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">Account codes and tax rates must match the company’s chart of accounts in Xero — check them with your accountant. ${ed?'':'Only a Director can change these.'}</div>${cards}${codes}<div class="savemsg" id="saveMsg"></div>`;
+}
+async function xoSaveSettings(e){
+  const v=k=>{ const x=el(`xs_${e}_${k}`); return x?x.value.trim():''; };
+  const row={enabled:el(`xs_${e}_enabled`).checked, start_date:v('start_date')||null, tracking_category:v('tracking_category')||null,
+    sales_account_code:v('sales_account_code')||null, sales_tax_type:v('sales_tax_type')||null, invoice_due_days:Number(v('invoice_due_days')||30),
+    purchases_account_code:v('purchases_account_code')||null, purchase_tax_type:v('purchase_tax_type')||null, bill_due_days:Number(v('bill_due_days')||30),
+    updated_at:new Date().toISOString()};
+  const r=await sb.from('xero_settings').update(row).eq('entity_code',e).select();
+  if(r.error||!r.data||!r.data.length) return msg('Not saved: '+(r.error?poFriendlyError(r.error):'only a Director can change these'),'err');
+  XO=null; go('xero'); setTimeout(()=>msg('✓ '+e+' settings saved.','ok'),900);
+}
+async function xoSaveCodes(){
+  for(const c of XO.codes){ const v=(el('xc_'+c.code).value||'').trim()||null; if(v!==(c.xero_account_code||null)){
+    const r=await sb.from('cost_codes').update({xero_account_code:v}).eq('code',c.code).select();
+    if(r.error||!r.data||!r.data.length) return msg('Not saved: '+(r.error?poFriendlyError(r.error):'no permission'),'err'); } }
+  XO=null; go('xero'); setTimeout(()=>msg('✓ Account codes saved.','ok'),900);
 }
 </script>
 </body>
