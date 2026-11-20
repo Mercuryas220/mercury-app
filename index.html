@@ -5100,6 +5100,13 @@ const JOB_STATUSES=[
   ['invoiced','Invoiced','violet'], ['closed','Closed','grey'], ['cancelled','Cancelled','red']];
 const JOB_OPEN=['created','mobilising','live','complete','ready_to_invoice'];
 
+// Ready to invoice / Invoiced are set by the completion checklist and billing,
+// never chosen by hand. An invoiced job can only be closed.
+function jobStatusChoices(cur){
+  if(cur==='invoiced') return JOB_STATUSES.filter(s=>['invoiced','closed'].includes(s[0]));
+  if(cur==='ready_to_invoice') return JOB_STATUSES.filter(s=>s[0]===cur);
+  return JOB_STATUSES.filter(s=>!['ready_to_invoice','invoiced'].includes(s[0]) || s[0]===cur);
+}
 function jobCan(p){ return !!(MYPERMS && MYPERMS.includes(p)); }
 function jobStatusChip(s){ const x=JOB_STATUSES.find(r=>r[0]===s)||[s,s,'grey']; return `<span class="chip ${x[2]}">${esc(x[1])}</span>`; }
 function jobMoney(v,cur){ if(v==null||v==='') return '—'; const n=Number(v); const sym=({GBP:'£',EUR:'€',USD:'$'})[cur]||(cur+' '); return (n<0?'-':'')+sym+Math.abs(n).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -5248,7 +5255,7 @@ function openJobForm(id){
       </div>
       <div class="frow">
         <div class="fld"><label>Original contract value</label><input value="${esc(jobMoney(j.contract_value,j.currency))}${fromQuote?' (from the accepted quote)':''}" disabled></div>
-        ${isNew?'':`<div class="fld"><label>Status</label><select id="jb_status" ${dis}>${JOB_STATUSES.map(s=>`<option value="${s[0]}" ${s[0]===j.status?'selected':''}>${s[1]}</option>`).join('')}</select></div>`}
+        ${isNew?'':`<div class="fld"><label>Status</label><select id="jb_status" ${dis||j.status==='ready_to_invoice'?'disabled':''} title="${j.status==='ready_to_invoice'?'Set by the completion checklist':''}">${jobStatusChoices(j.status).map(s=>`<option value="${s[0]}" ${s[0]===j.status?'selected':''}>${s[1]}</option>`).join('')}</select></div>`}
       </div>
       <div class="frow">
         <div class="fld"><label>Start date</label><input id="jb_start" ${dis} type="date" value="${esc(String(j.start_date||'').slice(0,10))}"></div>
@@ -5261,6 +5268,7 @@ function openJobForm(id){
       ${!isNew?`<div id="jobCosts" style="margin-top:14px"></div>`:''}
       ${!isNew?`<div id="jobLabour" style="margin-top:14px"></div>`:''}
       ${!isNew?`<div id="jobVars" style="margin-top:14px"></div>`:''}
+      ${!isNew?`<div id="jobBilling" style="margin-top:14px"></div>`:''}
     </div>
     <div class="modal-foot">
       ${!isNew&&jobCan('history.view')?`<button class="btn-ghost" onclick="openJobHistory('${j.id}')">History</button>`:''}
@@ -5276,6 +5284,7 @@ function openJobForm(id){
   if(!isNew && typeof jobLoadLabour==='function') jobLoadLabour(j);
   if(!isNew && typeof jobLoadPnl==='function') jobLoadPnl(j);
   if(!isNew && typeof jobLoadVariations==='function') jobLoadVariations(j);
+  if(!isNew && typeof jobLoadBilling==='function') jobLoadBilling(j);
 }
 
 async function jobLoadBudget(j){
@@ -5297,7 +5306,7 @@ async function submitJob(id){
     site_id:v('jb_site')||null, title:v('jb_title'),
     description:v('jb_desc')||null, location:v('jb_loc')||null, client_po_ref:v('jb_po')||null,
     start_date:v('jb_start')||null, end_date:v('jb_end')||null, job_manager:v('jb_mgr')||null, notes:v('jb_notes')||null };
-  if(el('jb_status')) payload.status=v('jb_status');
+  if(el('jb_status') && !el('jb_status').disabled) payload.status=v('jb_status');
   if(isNew) payload.entity_code=v('jb_entity');
   if(isNew && !payload.entity_code) return msg('Choose the trading company.','err');
   if(!payload.title) return msg('Give the job a title.','err');
@@ -6793,8 +6802,9 @@ async function loadCommercial(){
     let labour=[];
     if(jobCan('cost_rates.view')){ const d=new Date(); const from=ymd(new Date(d.getFullYear(),d.getMonth(),1)); labour=await jobFetchAll(()=>sb.from('labour_entries').select('job_id,cost_amount,hours,ot_hours,worker_type,work_date,status').eq('status','confirmed').gte('work_date',from)); }
     const jobs=await jobFetchAll(()=>sb.from('jobs').select('id,job_ref,title,client_id,entity_code,currency,status,created_at,archived_at'));
-    COMM={q,pnl,pos,vars,labour,jobs};
-  }catch(e){ COMM_ERR=e.message||String(e); COMM={q:[],pnl:[],pos:[],vars:[],labour:[],jobs:[]}; }
+    const bill=typeof loadBillingSummary==='function'?await loadBillingSummary():[];
+    COMM={q,pnl,pos,vars,labour,jobs,bill};
+  }catch(e){ COMM_ERR=e.message||String(e); COMM={q:[],pnl:[],pos:[],vars:[],labour:[],jobs:[],bill:[]}; }
   COMM_LOADING=false;
   if(CURRENT==='commercial') go('commercial');
 }
@@ -6824,6 +6834,12 @@ function pageCommercial(){
   const red=active.filter(p=>p.rag==='red'), orange=active.filter(p=>p.rag==='orange');
   const over=active.filter(p=>Number(p.committed)+Number(p.actual)>Number(p.revised_budget)&&Number(p.revised_budget)>0);
   const toInvoice=pnl.filter(p=>['complete','ready_to_invoice'].includes(p.status));
+  const billJ=r=>({...r, currency:(jobById[r.job_id]||{}).currency, entity_code:(jobById[r.job_id]||{}).entity_code, client_id:(jobById[r.job_id]||{}).client_id});
+  const bills=(COMM.bill||[]).map(billJ).filter(b=>{ const f=COMM_F; return (f.entity==='all'||b.entity_code===f.entity)&&(f.client==='all'||b.client_id===f.client); });
+  const readyBills=bills.filter(b=>b.status==='ready');
+  const mStart=ymd(new Date(new Date().getFullYear(),new Date().getMonth(),1));
+  const invMonth=bills.filter(b=>b.status==='invoiced'&&String(b.invoice_date||'')>=mStart);
+  const unpaid=bills.filter(b=>b.status==='invoiced'&&b.payment_status!=='paid');
   const openPOs=COMM.pos.map(withJob).filter(p=>['open','part_invoiced'].includes(p.status)&&commIn(p,'created_at'));
   const pendVars=COMM.vars.map(withJob).filter(v=>['draft','submitted'].includes(v.status)&&commIn(v,'created_at'));
   const lab=COMM.labour.map(withJob).filter(l=>commIn(l,'work_date'));
@@ -6855,12 +6871,231 @@ function pageCommercial(){
       ${k('🧾','Open POs · still to invoice',openPOs.length,sumByCur(openPOs,p=>Math.max(Number(p.total)-Number(p.invoiced),0)))}
       ${k('👷','Labour cost this month',labText,'employed engineers, confirmed')}
     </div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${k('🧾','Ready to invoice',readyBills.length,sumByCur(readyBills,'amount'))}
+      ${k('📤','Invoiced this month',invMonth.length,sumByCur(invMonth,'invoiced_amount'))}
+      ${k('⏱','Invoiced · not yet paid',unpaid.length,sumByCur(unpaid,'invoiced_amount'))}
+      ${k('✅','Completed jobs awaiting invoicing',toInvoice.length,sumByCur(toInvoice,'revised_value'))}
+    </div>
+    ${sec('Ready to invoice — raise in Xero', readyBills.length?`<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Job</th><th>Stage</th><th style="text-align:right">Amount (net)</th></tr></thead><tbody>${readyBills.map(b=>`<tr><td style="white-space:nowrap"><a href="#" onclick="event.preventDefault();JOBREG=null;go('jobreg');setTimeout(()=>openJobForm('${b.job_id}'),1500)"><b>${esc((jobById[b.job_id]||{}).job_ref||'')}</b></a><div class="muted" style="font-size:11.5px">${esc(jobClientName(b.client_id))}</div></td><td>${esc(b.label)}</td><td style="text-align:right">${jobMoney(b.amount,b.currency)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted" style="padding:12px">Nothing waiting.</div>')}
     ${sec('Jobs needing attention (red and orange)', jobTable(red.concat(orange),'None — every active job is green.'))}
     ${sec('Jobs over their approved budget', jobTable(over,'None.'))}
     ${sec('Completed — awaiting invoicing', jobTable(toInvoice,'None.'))}
     ${sec('Quotes', `<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13.5px">${Q_STATUSES.map(s=>`<div>${esc(s[1])}: <b>${qStatusCount(s[0])}</b></div>`).join('')}<div>Converted to jobs: <b>${quotes.filter(x=>x.job_id).length}</b></div></div>`)}
     ${sec('Variations not yet approved', pendVars.length?`<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Number</th><th>Variation</th><th>Status</th><th style="text-align:right">Selling value</th></tr></thead><tbody>${pendVars.map(v=>`<tr><td><b>${esc(v.var_ref)}</b></td><td>${esc(v.title)}</td><td>${varChip(v)}</td><td style="text-align:right">${jobMoney(v.sell_total,(jobById[v.job_id]||{}).currency)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted" style="padding:12px">None.</div>')}
     ${sec('All active jobs', jobTable(active,'No active jobs.'))}`;
+}
+/* ===================================================================
+   BILLING & COMPLETION  —  Phase 4b.
+   Each job has billing stages (deposit, stage payment, monthly,
+   variation, final). Invoices are raised in Xero; here we record the
+   Xero invoice number, date and value against the stage.
+   The commercial completion checklist marks the job Ready to Invoice
+   and readies the final stage. The job becomes Invoiced automatically
+   when every stage is invoiced. A Director can reopen a completed job.
+   =================================================================== */
+
+let BILL={job:null, stages:[], revised:null};
+
+const BILL_TYPES=[['deposit','Deposit'],['stage','Stage payment'],['monthly','Monthly'],['variation','Variation'],['final','Final invoice'],['other','Other']];
+const BILL_STATUS=[['planned','Planned','grey'],['ready','Ready to invoice','amber'],['invoiced','Invoiced','green'],['cancelled','Cancelled','grey']];
+const BILL_PAY={unpaid:'Unpaid', part_paid:'Part paid', paid:'Paid'};
+const COMPLETION_CHECKS=[
+  ['work_complete','All work on site is finished and signed off by the client'],
+  ['supplier_invoices','All supplier and subcontractor invoices have been received and entered'],
+  ['pos_reviewed','Purchase orders reviewed — anything still open is expected or has been closed'],
+  ['labour_checked','All labour hours are confirmed and agency / self-employed invoices entered'],
+  ['variations_reviewed','Every variation is approved, rejected or withdrawn'],
+  ['final_value','The final account value is agreed with the client'],
+  ['profit_reviewed','The final profit position has been reviewed']];
+const JOB_COMPLETED=['ready_to_invoice','invoiced','closed'];
+
+function billChip(s){ const x=BILL_STATUS.find(r=>r[0]===s)||[s,s,'grey']; return `<span class="chip ${x[2]}">${x[1]}</span>`; }
+function billType(t){ return (BILL_TYPES.find(x=>x[0]===t)||[t,t])[1]; }
+function billErr(e){ const m=(e&&e.message)||String(e);
+  if(/job_billing_xero_no_unique/.test(m)) return 'That Xero invoice number has already been recorded for this company.';
+  return poFriendlyError(e); }
+function billJob(){ return BILL.job ? ((JOBREG||[]).find(x=>x.id===BILL.job.id)||BILL.job) : null; }
+
+/* ---------- section inside the job ---------- */
+async function jobLoadBilling(j){
+  const box=el('jobBilling'); if(!box) return;
+  try{ await poEnsurePerms(); }catch(e){}
+  if(!jobCan('jobs.view')){ box.innerHTML=''; return; }
+  const [s,v]=await Promise.all([
+    sb.from('job_billing_stages').select('*').eq('job_id',j.id).order('stage_seq'),
+    sb.from('job_variations').select('sell_total').eq('job_id',j.id).eq('status','approved')]);
+  if(s.error){ box.innerHTML=`<div class="muted">Could not load billing: ${esc(s.error.message)}</div>`; return; }
+  BILL={job:j, stages:s.data||[], revised:Number(j.contract_value||0)+(v.data||[]).reduce((a,x)=>a+Number(x.sell_total||0),0)};
+  let comp=null;
+  if(JOB_COMPLETED.includes(j.status) && jobCan('margins.view')){
+    const c=await sb.from('job_completions').select('*').eq('job_id',j.id).order('completed_at',{ascending:false}); comp=(c.data||[]).find(x=>!x.reopened_at)||null; }
+  const cur=j.currency, m=x=>jobMoney(x,cur), can=jobCan('invoices.record') && !j.archived_at && j.status!=='cancelled';
+  const done=JOB_COMPLETED.includes(j.status);
+  const live=BILL.stages.filter(x=>x.status!=='cancelled');
+  const scheduled=live.reduce((a,x)=>a+Number(x.amount),0);
+  const invoiced=BILL.stages.filter(x=>x.status==='invoiced').reduce((a,x)=>a+Number(x.invoiced_amount),0);
+  const acts=x=>{ if(!can) return '';
+    const b=[];
+    if(x.status==='planned' && (x.stage_type!=='final'||done)) b.push(`<button class="btn-ghost" style="padding:4px 8px" onclick="billSetStatus('${x.id}','ready')">Mark ready</button>`);
+    if(x.status==='ready') b.push(`<button class="btn-ghost" style="padding:4px 8px" onclick="billSetStatus('${x.id}','planned')">Not yet</button>`);
+    if(['planned','ready'].includes(x.status) && (x.stage_type!=='final'||done)) b.push(`<button class="btn" style="padding:4px 10px" onclick="billInvoiceForm('${x.id}')">Record Xero invoice</button>`);
+    if(['planned','ready'].includes(x.status)) b.push(`<button class="btn-ghost" style="padding:4px 8px" onclick="billEditForm('${x.id}')">Edit</button><button class="btn-ghost" style="padding:4px 8px;color:var(--red)" onclick="billCancel('${x.id}')">Cancel</button>`);
+    if(x.status==='invoiced') b.push(`<button class="btn-ghost" style="padding:4px 8px" onclick="billPayment('${x.id}')">Payment</button>`);
+    return `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${b.join('')}</div>`; };
+  const rows=BILL.stages.map(x=>`<tr style="${x.status==='cancelled'?'opacity:.55':''}"><td>${x.stage_seq}</td>
+      <td><b>${esc(x.label)}</b><div class="muted" style="font-size:11.5px">${esc(billType(x.stage_type))}${x.planned_date?' · planned '+jobDate(x.planned_date):''}${x.cancel_reason?' · '+esc(x.cancel_reason):''}${x.note?' · '+esc(x.note):''}</div></td>
+      <td style="text-align:right">${m(x.amount)}</td><td>${billChip(x.status)}</td>
+      <td>${x.status==='invoiced'?`<b>${esc(x.xero_invoice_no)}</b><div class="muted" style="font-size:11.5px">${jobDate(x.invoice_date)} · ${m(x.invoiced_amount)} · ${BILL_PAY[x.payment_status]||''}</div>`:''}</td>
+      <td>${acts(x)}</td></tr>`).join('');
+  let banner='';
+  if(done){
+    banner=`<div class="box" style="background:var(--green-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1"><b>Commercially complete</b>${comp?` ${jobDate(comp.completed_at)} — final value ${m(comp.final_value)}, forecast final cost ${m(comp.final_cost_forecast)}, margin ${pct(comp.final_margin)}${comp.notes?' · '+esc(comp.notes):''}`:''}</div>
+      ${jobCan('records.restore')&&j.status!=='closed'?`<button class="btn-ghost" onclick="billReopen('${j.id}')">Reopen job</button>`:''}</div>`;
+  } else if(jobCan('jobs.complete') && !j.archived_at && j.status!=='cancelled'){
+    banner=`<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1">When the work is finished, run the completion checklist. It records the final figures, sets the job to <b>Ready to invoice</b> and readies the final invoice.</div>
+      <button class="btn" onclick="openCompleteJob('${j.id}')">Complete job…</button></div>`;
+  }
+  const cell=(l,v,st)=>`<div style="min-width:120px"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em">${l}</div><div style="font-weight:700;font-size:14px${st?';'+st:''}">${v}</div></div>`;
+  box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="font-weight:700;flex:1">Billing</div>${can?`<button class="btn-ghost" onclick="billEditForm(null)">＋ Add billing stage</button>`:''}</div>
+    ${banner}
+    <div class="card" style="padding:8px 10px;overflow-x:auto">
+      <div style="display:flex;flex-wrap:wrap;gap:12px 22px;padding:4px 4px 10px">${cell('Revised value',m(BILL.revised))}${cell('Scheduled',m(scheduled),Math.abs(scheduled-BILL.revised)>0.005?'color:var(--amber)':'')}${cell('Invoiced',m(invoiced))}${cell('Left to invoice',m(BILL.revised-invoiced))}</div>
+      <table class="tbl" id="billTable"><thead><tr><th>#</th><th>Stage</th><th style="text-align:right">Amount (net)</th><th>Status</th><th>Xero invoice</th><th></th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="6" class="muted">No billing stages yet. Add a deposit or stage payments, or leave it — the final invoice is created when the job is completed.</td></tr>'}</tbody></table>
+      <div class="muted" style="font-size:11.5px;padding:6px 4px">Raise the invoice in Xero as normal, then record its number here. Amounts are excluding VAT, in ${esc(cur||'')}.${Math.abs(scheduled-BILL.revised)>0.005&&live.length?' The stages do not add up to the revised value — the final invoice picks up the difference when the job is completed.':''}</div>
+    </div>`;
+}
+function billRefresh(){ const j=billJob(); if(!j) return; jobLoadBilling(j); if(typeof jobLoadPnl==='function') jobLoadPnl(j); }
+async function billReloadJob(id){
+  const r=await sb.from('jobs').select('*').eq('id',id).single();
+  if(!r.error&&r.data){ const i=(JOBREG||[]).findIndex(x=>x.id===id); if(i>=0) JOBREG[i]=r.data; }
+  return r.data;
+}
+
+/* ---------- small modal helper ---------- */
+function billModal(id,title,body,foot,width){
+  const old=el(id); if(old) old.remove();
+  const box=document.createElement('div'); box.className='modal-bg'; box.id=id; box.style.zIndex=1001;
+  box.innerHTML=`<div class="modal" style="max-width:${width||560}px"><div class="modal-h"><h3>${title}</h3><button class="modal-x" onclick="el('${id}').remove()">✕</button></div>
+    <div class="modal-b">${body}</div><div class="modal-foot" style="flex-wrap:wrap">${foot}</div><div class="savemsg" id="${id}Msg" style="padding:0 18px 14px"></div></div>`;
+  document.body.appendChild(box);
+}
+const billSay=(id,t)=>{ const e=el(id+'Msg'); if(e) e.textContent=t; };
+
+/* ---------- add / edit a stage ---------- */
+function billEditForm(sid){
+  const j=billJob(); const x=sid?BILL.stages.find(s=>s.id===sid):{stage_type:'stage'};
+  const left=BILL.revised-BILL.stages.filter(s=>s.status!=='cancelled').reduce((a,s)=>a+Number(s.amount),0);
+  billModal('billModal', (sid?'Edit billing stage':'New billing stage')+' · '+esc(j.job_ref),
+    `<div class="frow"><div class="fld"><label>Type <span class="req">*</span></label><select id="bs_type">${BILL_TYPES.map(t=>`<option value="${t[0]}" ${t[0]===x.stage_type?'selected':''}>${t[1]}</option>`).join('')}</select></div>
+       <div class="fld"><label>Planned date</label><input id="bs_date" type="date" value="${esc(String(x.planned_date||'').slice(0,10))}"></div></div>
+     <div class="fld"><label>Description <span class="req">*</span></label><input id="bs_label" value="${esc(x.label||'')}" placeholder="e.g. Deposit 30% on order, Stage 2 — install complete, March valuation"></div>
+     <div class="frow"><div class="fld"><label>Amount excl. VAT (${esc(j.currency)}) <span class="req">*</span></label><input id="bs_amt" type="number" step="0.01" value="${esc(x.amount??'')}"></div>
+       <div class="fld"><label>&nbsp;</label><div class="muted" style="font-size:12px;padding-top:10px">Not yet scheduled: <b>${jobMoney(left,j.currency)}</b> · <a href="#" onclick="event.preventDefault();billPct()">% of value…</a></div></div></div>
+     <div class="fld"><label>Note</label><input id="bs_note" value="${esc(x.note||'')}"></div>
+     <div class="muted" style="font-size:12px">A <b>final</b> stage can only be invoiced once the job has passed its completion checklist. Use a negative amount for a credit.</div>`,
+    `<button class="btn-ghost" onclick="el('billModal').remove()">Cancel</button><button class="btn" id="bsSave" onclick="billSaveStage(${sid?`'${sid}'`:'null'})">${sid?'Save':'Add stage'}</button>`);
+}
+function billPct(){ const p=prompt('Percentage of the revised value ('+jobMoney(BILL.revised,billJob().currency)+'):','30'); if(p===null) return;
+  const n=Number(p); if(isNaN(n)) return; el('bs_amt').value=(Math.round(BILL.revised*n)/100).toFixed(2); }
+async function billSaveStage(sid){
+  const row={stage_type:el('bs_type').value, label:el('bs_label').value.trim(), amount:Number(el('bs_amt').value), planned_date:el('bs_date').value||null, note:el('bs_note').value.trim()||null};
+  if(!row.label) return billSay('billModal','Add a description.');
+  if(el('bs_amt').value===''||!row.amount) return billSay('billModal','Enter the amount.');
+  el('bsSave').disabled=true;
+  const r=sid?await sb.from('job_billing_stages').update(row).eq('id',sid).select():await sb.from('job_billing_stages').insert({...row, job_id:BILL.job.id}).select();
+  if(r.error||!r.data||!r.data.length){ el('bsSave').disabled=false; return billSay('billModal','Not saved: '+(r.error?billErr(r.error):'no permission')); }
+  el('billModal').remove(); billRefresh();
+}
+async function billUpdate(sid,patch){
+  const r=await sb.from('job_billing_stages').update(patch).eq('id',sid).select();
+  if(r.error||!r.data||!r.data.length){ alert('Not saved: '+(r.error?billErr(r.error):'no permission')); return false; }
+  return true;
+}
+async function billSetStatus(sid,s){ if(await billUpdate(sid,{status:s})) billRefresh(); }
+async function billCancel(sid){
+  const x=BILL.stages.find(s=>s.id===sid);
+  const reason=prompt(`Cancel billing stage “${x.label}”?\n\nReason:`); if(reason===null) return;
+  if(!reason.trim()){ alert('A reason is needed.'); return; }
+  if(await billUpdate(sid,{status:'cancelled', cancel_reason:reason.trim()})) billRefresh();
+}
+
+/* ---------- record the Xero invoice ---------- */
+function billInvoiceForm(sid){
+  const x=BILL.stages.find(s=>s.id===sid), j=billJob();
+  billModal('billInv','Record Xero invoice · '+esc(x.label),
+    `<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">Raise the invoice in Xero first (${esc(j.entity_code)} company, reference <b>${esc(j.job_ref)}</b>${j.client_po_ref?', client PO '+esc(j.client_po_ref):''}), then record it here. Once recorded the stage is locked.</div>
+     <div class="frow"><div class="fld"><label>Xero invoice number <span class="req">*</span></label><input id="bi_no" placeholder="e.g. INV-1234"></div>
+       <div class="fld"><label>Invoice date <span class="req">*</span></label><input id="bi_date" type="date" value="${ymd(new Date())}"></div></div>
+     <div class="frow"><div class="fld"><label>Invoice value excl. VAT (${esc(j.currency)}) <span class="req">*</span></label><input id="bi_amt" type="number" step="0.01" value="${esc(x.amount)}"></div>
+       <div class="fld"><label>Note</label><input id="bi_note" value="${esc(x.note||'')}"></div></div>`,
+    `<button class="btn-ghost" onclick="el('billInv').remove()">Cancel</button><button class="btn" id="biSave" onclick="billInvoiceSave('${sid}')">Record invoice</button>`);
+}
+async function billInvoiceSave(sid){
+  const no=el('bi_no').value.trim(), d=el('bi_date').value, a=el('bi_amt').value;
+  if(!no) return billSay('billInv','Enter the Xero invoice number.'); if(!d) return billSay('billInv','Enter the invoice date.'); if(a==='') return billSay('billInv','Enter the invoice value.');
+  const x=BILL.stages.find(s=>s.id===sid);
+  if(Math.abs(Number(a)-Number(x.amount))>0.005 && !confirm(`The invoice value (${jobMoney(a,billJob().currency)}) differs from the stage amount (${jobMoney(x.amount,billJob().currency)}). Record it anyway?`)) return;
+  el('biSave').disabled=true;
+  const r=await sb.from('job_billing_stages').update({status:'invoiced', xero_invoice_no:no, invoice_date:d, invoiced_amount:Number(a), note:el('bi_note').value.trim()||null}).eq('id',sid).select();
+  if(r.error||!r.data||!r.data.length){ el('biSave').disabled=false; return billSay('billInv','Not saved: '+(r.error?billErr(r.error):'no permission')); }
+  el('billInv').remove();
+  const j=await billReloadJob(BILL.job.id);
+  if(j && j.status==='invoiced'){ BILL.job=j; reopenJobAfter(j.id,'✓ Invoice recorded — every stage is invoiced, so the job is now Invoiced.'); }
+  else billRefresh();
+}
+async function billPayment(sid){
+  const x=BILL.stages.find(s=>s.id===sid);
+  const s=prompt(`Payment status for ${x.xero_invoice_no}: type unpaid, part paid or paid`, (BILL_PAY[x.payment_status]||'unpaid').toLowerCase()); if(s===null) return;
+  const v=s.trim().toLowerCase().replace(/[\s-]+/g,'_'); if(!BILL_PAY[v]){ alert('Type unpaid, part paid or paid.'); return; }
+  if(await billUpdate(sid,{payment_status:v, paid_date:v==='paid'?ymd(new Date()):null})) billRefresh();
+}
+
+/* ---------- completion checklist ---------- */
+async function openCompleteJob(jobId){
+  const j=(JOBREG||[]).find(x=>x.id===jobId)||BILL.job;
+  const r=await sb.rpc('job_completion_findings',{p_job:jobId});
+  if(r.error){ alert('Could not run the checks: '+billErr(r.error)); return; }
+  const f=r.data||{blockers:[],warnings:[]}, cur=j.currency, m=x=>jobMoney(x,cur);
+  const blk=(f.blockers||[]), wrn=(f.warnings||[]);
+  const list=(arr,col,icon)=>arr.map(x=>`<div style="display:flex;gap:8px;padding:6px 0;color:${col}"><span>${icon}</span><span>${esc(x.text)}</span></div>`).join('');
+  const p=f.pnl;
+  billModal('compModal','Complete job · '+esc(j.job_ref),
+    `${blk.length?`<div class="box" style="background:var(--red-soft);border-radius:10px;padding:8px 12px;font-size:13px;margin-bottom:10px"><b>Fix these first</b>${list(blk,'var(--red)','✕')}</div>`:''}
+     ${wrn.length?`<div class="box" style="background:var(--amber-soft);border-radius:10px;padding:8px 12px;font-size:13px;margin-bottom:10px"><b>Check these</b> — explain them in the note below${list(wrn,'var(--amber)','!')}</div>`:''}
+     ${!blk.length&&!wrn.length?`<div class="box" style="background:var(--green-soft);border-radius:10px;padding:8px 12px;font-size:13px;margin-bottom:10px">✓ No problems found.</div>`:''}
+     ${p?`<div class="card" style="padding:10px 12px;margin-bottom:10px;font-size:13px;display:flex;flex-wrap:wrap;gap:8px 20px"><div>Final value <b>${m(p.revised_value)}</b></div><div>Forecast final cost <b>${m(p.forecast_final_cost)}</b></div><div>Margin <b>${pct(p.forecast_margin)}</b> (expected ${pct(p.expected_margin)})</div><div>${ragChip(p.rag)}</div></div>`:''}
+     <div style="font-weight:700;margin:6px 0">Confirm each item</div>
+     ${COMPLETION_CHECKS.map(c=>`<label style="display:flex;gap:10px;align-items:flex-start;padding:5px 0;font-size:13.5px"><input type="checkbox" class="cj_chk" data-k="${c[0]}" style="width:auto;margin-top:3px" onchange="billCheckReady()"> <span>${esc(c[1])}</span></label>`).join('')}
+     <div class="fld" style="margin-top:8px"><label>Notes${wrn.length?' <span class="req">*</span>':''}</label><textarea id="cj_notes" rows="2" placeholder="${wrn.length?'Explain the warnings above':'Optional'}"></textarea></div>
+     <div class="muted" style="font-size:12px">Completing records these figures, sets the job to <b>Ready to invoice</b> and readies the final invoice for whatever has not yet been billed. A Director can reopen it if needed.</div>`,
+    `<button class="btn-ghost" onclick="el('compModal').remove()">Cancel</button><button class="btn" id="cjSave" disabled ${blk.length?'data-blocked="1"':''} onclick="billCompleteSave('${jobId}')">Complete job</button>`, 680);
+}
+function billCheckReady(){ const b=el('cjSave'); if(!b) return; b.disabled=!!b.dataset.blocked || [...document.querySelectorAll('.cj_chk')].some(c=>!c.checked); }
+async function billCompleteSave(jobId){
+  const checks={}; document.querySelectorAll('.cj_chk').forEach(c=>checks[c.dataset.k]=c.checked);
+  el('cjSave').disabled=true; billSay('compModal','Completing…');
+  const r=await sb.rpc('complete_job',{p_job:jobId, p_checks:checks, p_notes:el('cj_notes').value.trim()||null});
+  if(r.error){ el('cjSave').disabled=false; return billSay('compModal','Not completed: '+billErr(r.error)); }
+  el('compModal').remove(); await billReloadJob(jobId);
+  reopenJobAfter(jobId,'✓ Job completed — now Ready to invoice. Record the final Xero invoice below.');
+}
+async function billReopen(jobId){
+  const reason=prompt('Reopen this job? It goes back to Live and the final invoice goes back to planned.\n\nReason:'); if(reason===null) return;
+  if(!reason.trim()){ alert('A reason is needed.'); return; }
+  const r=await sb.rpc('reopen_job',{p_job:jobId, p_reason:reason.trim()});
+  if(r.error){ alert('Not reopened: '+billErr(r.error)); return; }
+  await billReloadJob(jobId); reopenJobAfter(jobId,'✓ Job reopened.');
+}
+function reopenJobAfter(jobId,text){ closeForm(); openJobForm(jobId); setTimeout(()=>msg(text,'ok'),50); }
+
+/* ---------- dashboard data ---------- */
+async function loadBillingSummary(){
+  if(!jobCan('jobs.view')) return [];
+  return jobFetchAll(()=>sb.from('job_billing_stages').select('id,job_id,label,stage_type,amount,status,xero_invoice_no,invoice_date,invoiced_amount,payment_status'));
 }
 </script>
 </body>
