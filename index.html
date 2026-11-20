@@ -707,6 +707,7 @@ function renderShell(){
       <button class="nav-btn" data-page="quotereg"><span class="ic">📝</span> Quotes</button>
       <button class="nav-btn" data-page="jobreg"><span class="ic">📋</span> Jobs</button>
       <button class="nav-btn" data-page="poreg"><span class="ic">🧾</span> Purchase orders</button>
+      <button class="nav-btn" data-page="labour"><span class="ic">👷</span> Labour &amp; rates</button>
       <button class="nav-btn" data-page="jobs"><span class="ic">🚦</span> Job Status</button>
       <button class="nav-btn" data-page="engineers"><span class="ic">👷</span> Engineers</button>
       <button class="nav-btn" data-page="compliance"><span class="ic">🛡</span> Compliance</button>
@@ -5030,6 +5031,7 @@ function go(page){
     else if(page==='jobreg')html=pageJobRegister();
     else if(page==='quotereg')html=pageQuoteRegister();
     else if(page==='poreg')html=pagePOs();
+    else if(page==='labour')html=pageLabour();
     else if(!CLIENT){ html=emptyState('👈','Choose a client','Pick a client from the dropdown above'+(PROFILE.role==='admin'?', the Clients page or HQ':'')+' to open their dashboard.'); }
     else if(page==='command')html=pageCommand();
     else if(page==='checkins')html=pageCheckins();
@@ -5252,6 +5254,7 @@ function openJobForm(id){
       ${fromQuote?`<div class="muted" style="font-size:12.5px;margin-top:4px">From quote <a href="#" onclick="event.preventDefault();closeForm();QUOTES=null;go('quotereg')">${esc(j.job_ref)}</a>${j.client_po_ref?' · client PO '+esc(j.client_po_ref):''}</div>`:''}
       ${jobCan('margins.view')&&!isNew?`<div id="jobBudget" style="margin-top:12px"></div>`:''}
       ${!isNew?`<div id="jobCosts" style="margin-top:14px"></div>`:''}
+      ${!isNew?`<div id="jobLabour" style="margin-top:14px"></div>`:''}
     </div>
     <div class="modal-foot">
       ${!isNew&&jobCan('history.view')?`<button class="btn-ghost" onclick="openJobHistory('${j.id}')">History</button>`:''}
@@ -5264,6 +5267,7 @@ function openJobForm(id){
   document.body.appendChild(wrap);
   if(jobCan('margins.view') && !isNew) jobLoadBudget(j);
   if(!isNew && typeof jobLoadCosts==='function') jobLoadCosts(j);
+  if(!isNew && typeof jobLoadLabour==='function') jobLoadLabour(j);
 }
 
 async function jobLoadBudget(j){
@@ -6334,6 +6338,235 @@ async function jobVoidCost(id, jobId){
   const r=await sb.from('job_other_costs').update({status:'void', void_reason:reason.trim()}).eq('id',id).select();
   if(r.error||!r.data||!r.data.length){ alert('Not voided: '+(r.error?poFriendlyError(r.error):'no permission')); return; }
   jobRefreshCosts(jobId);
+}
+/* ===================================================================
+   LABOUR  —  Phase 3b. One register of people, dated loaded cost rates
+   for employed engineers, and labour entries per person / job / day.
+   Employed: confirmed hours × rate = job labour cost.
+   Agency / self-employed: hours recorded to check their invoices only —
+   their invoice against a PO is the cost.
+   =================================================================== */
+
+let WORKERS=null, WORKERS_ERR=null, WORKERS_LOADING=false, WRATES=[];
+let WORKER_F={type:'all', q:'', active:'yes'};
+
+TITLES.labour='Labour & rates';
+
+const WORKER_TYPES=[['employed','Employed (PAYE)','green'],['self_employed','Self-employed','cyan'],['agency','Agency','violet'],['unclassified','To classify','amber']];
+function workerTypeChip(t){ const x=WORKER_TYPES.find(r=>r[0]===t)||[t,t,'grey']; return `<span class="chip ${x[2]}">${esc(x[1])}</span>`; }
+function workerName(id){ const w=(WORKERS||[]).find(x=>x.id===id); return w?w.full_name:'—'; }
+function workerRateOn(wid, date){
+  return WRATES.filter(r=>r.worker_id===wid && r.effective_from<=date && (!r.effective_to || r.effective_to>=date)).sort((a,b)=>a.effective_from<b.effective_from?1:-1)[0];
+}
+function rateText(r){ if(!r) return '—'; return `${jobMoney(r.rate,r.currency)}/${r.rate_basis==='hour'?'hr':'day'}`; }
+
+async function loadWorkers(){
+  if(WORKERS_LOADING) return; WORKERS_LOADING=true; WORKERS_ERR=null;
+  try{
+    await poEnsurePerms();
+    const [w, r] = await Promise.all([
+      jobFetchAll(()=>sb.from('workers').select('*').order('full_name')),
+      jobCan('cost_rates.view') ? jobFetchAll(()=>sb.from('worker_cost_rates').select('*').order('effective_from')) : Promise.resolve([])]);
+    WORKERS=w; WRATES=r;
+    if(!SUPPLIERS_ALL.length){ try{ SUPPLIERS_ALL=await jobFetchAll(()=>sb.from('suppliers').select('*').order('name')); }catch(e){} }
+  }catch(e){ WORKERS_ERR=e.message||String(e); WORKERS=WORKERS||[]; }
+  WORKERS_LOADING=false;
+  if(CURRENT==='labour') go('labour');
+}
+
+function workerFiltered(){
+  const f=WORKER_F, q=f.q.trim().toLowerCase();
+  return (WORKERS||[]).filter(w=>{
+    if(f.active==='yes' && !w.active) return false;
+    if(f.type!=='all' && w.worker_type!==f.type) return false;
+    if(q && !String(w.full_name).toLowerCase().includes(q) && !String(poSupplier(w.supplier_id).name||'').toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+function workerSetFilter(k,v){ WORKER_F[k]=v; const t=el('workerTable'); if(t) t.innerHTML=workerTableHtml(); }
+
+function workerTableHtml(){
+  const rows=workerFiltered(), canEdit=jobCan('cost_rates.edit'), showRate=jobCan('cost_rates.view'), today=ymd(new Date());
+  if(!rows.length) return `<div class="empty" style="padding:26px"><div class="big">👷</div><b>No people match</b></div>`;
+  const typeSel=w=>`<select style="width:auto" onchange="workerSetType('${w.id}',this.value)">${WORKER_TYPES.map(t=>`<option value="${t[0]}" ${t[0]===w.worker_type?'selected':''}>${t[1]}</option>`).join('')}</select>`;
+  const supSel=w=>`<select style="width:auto;max-width:200px" onchange="workerSetSupplier('${w.id}',this.value)"><option value="">— none —</option>${SUPPLIERS_ALL.map(s=>`<option value="${s.id}" ${s.id===w.supplier_id?'selected':''}>${esc(s.name)}</option>`).join('')}</select>`;
+  return `<div style="overflow-x:auto" class="fld"><table class="tbl"><thead><tr><th>Name</th><th>Type</th><th>Invoiced by</th>${showRate?'<th>Current cost rate</th>':''}<th></th></tr></thead><tbody>${
+    rows.map(w=>{ const r=showRate?workerRateOn(w.id,today):null;
+      return `<tr${w.active?'':' style="opacity:.55"'}><td><b>${esc(w.full_name)}</b>${w.supplier_engineer_id?'<div class="muted" style="font-size:11.5px">from agency list</div>':''}</td>
+        <td>${canEdit?typeSel(w):workerTypeChip(w.worker_type)}</td>
+        <td>${['agency','self_employed'].includes(w.worker_type)?(canEdit?supSel(w):esc(poSupplier(w.supplier_id).name||'—')):'<span class="muted">—</span>'}</td>
+        ${showRate?`<td>${w.worker_type==='employed'?(r?`${rateText(r)} <span class="muted" style="font-size:11.5px">from ${jobDate(r.effective_from)}</span>`:'<span style="color:var(--amber)">No rate set</span>'):'<span class="muted">costed from invoices</span>'}</td>`:''}
+        <td style="white-space:nowrap">${w.worker_type==='employed'&&showRate?`<button class="btn-ghost" style="padding:5px 10px" onclick="workerRates('${w.id}')">Rates</button>`:''}</td></tr>`; }).join('')}</tbody></table></div>`;
+}
+
+function pageLabour(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','Only visible to the Mercury team.');
+  if(WORKERS===null){ loadWorkers(); return emptyState('⏳','Loading…','One moment.'); }
+  if(WORKERS_ERR) return emptyState('⚠','Could not load', esc(WORKERS_ERR)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="WORKERS=null;go('labour')">Try again</button></div>`);
+  const n=t=>(WORKERS||[]).filter(w=>w.active&&w.worker_type===t).length;
+  const noRate=(WORKERS||[]).filter(w=>w.active&&w.worker_type==='employed'&&!workerRateOn(w.id,ymd(new Date()))).length;
+  const header=`<div class="sechead"><h3>👷 Labour &amp; rates</h3><span class="sub">Everyone who works on jobs · employed engineers are costed at their loaded rate; agency and self-employed from their invoices</span><span class="line"></span>${jobCan('cost_rates.edit')?`<button class="addbtn" onclick="workerAdd()">＋ Add person</button>`:''}</div>`;
+  const kpis=`<div class="grid kpis" style="margin-bottom:14px">
+    <div class="card kpi kpi-link" role="button" onclick="workerSetFilter('type','unclassified');go('labour')"><div class="spark">❓</div><div class="lbl">To classify</div><div class="val">${n('unclassified')}</div><div class="kpi-go">→</div></div>
+    ${kpi('','🟢','Employed',n('employed'))}${kpi('','🧾','Self-employed',n('self_employed'))}${kpi('','🏢','Agency',n('agency'))}
+    ${jobCan('cost_rates.view')?kpi('','⚠️','Employed without a rate',noRate):''}</div>`;
+  const opt=(v,l,cur)=>`<option value="${v}" ${v===cur?'selected':''}>${l}</option>`;
+  const filters=`<div class="card fld" style="padding:12px 14px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+    <input placeholder="Search name or agency…" value="${esc(WORKER_F.q)}" oninput="workerSetFilter('q',this.value)" style="flex:1;min-width:200px;width:auto">
+    <select style="width:auto" onchange="workerSetFilter('type',this.value)">${opt('all','All types',WORKER_F.type)}${WORKER_TYPES.map(t=>opt(t[0],t[1],WORKER_F.type)).join('')}</select>
+    <select style="width:auto" onchange="workerSetFilter('active',this.value)">${opt('yes','Active only',WORKER_F.active)}${opt('all','Include inactive',WORKER_F.active)}</select></div>`;
+  return header+kpis+filters+`<div class="card" id="workerTable">${workerTableHtml()}</div>`;
+}
+
+async function workerUpdate(id, patch){
+  const r=await sb.from('workers').update(patch).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length){ alert('Not saved: '+(r.error?poFriendlyError(r.error):'you may not have permission')); return false; }
+  const i=WORKERS.findIndex(w=>w.id===id); WORKERS[i]=r.data[0]; return true;
+}
+async function workerSetType(id,t){ if(await workerUpdate(id,{worker_type:t})){ const x=el('workerTable'); if(x) x.innerHTML=workerTableHtml(); } }
+async function workerSetSupplier(id,s){ await workerUpdate(id,{supplier_id:s||null}); }
+
+function workerAdd(){
+  const box=document.createElement('div'); box.className='modal-bg'; box.id='modalBg';
+  box.innerHTML=`<div class="modal" style="max-width:520px"><div class="modal-h"><h3>Add person</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b"><div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">Engineers added in the engineer or agency lists appear here automatically. Use this for anyone else who works on jobs.</div>
+      <div class="fld"><label>Full name <span class="req">*</span></label><input id="wa_name"></div>
+      <div class="fld"><label>Type <span class="req">*</span></label><select id="wa_type">${WORKER_TYPES.filter(t=>t[0]!=='unclassified').map(t=>`<option value="${t[0]}">${t[1]}</option>`).join('')}</select></div>
+      <div class="fld"><label>Invoiced by (agency or self-employed)</label><select id="wa_sup"><option value="">— none —</option>${SUPPLIERS_ALL.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div></div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" onclick="workerAddSave()">Add</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(box);
+}
+async function workerAddSave(){
+  const name=el('wa_name').value.trim(); if(!name) return msg('Enter the name.','err');
+  const r=await sb.from('workers').insert({full_name:name, worker_type:el('wa_type').value, supplier_id:el('wa_sup').value||null}).select().single();
+  if(r.error) return msg('Not saved: '+poFriendlyError(r.error),'err');
+  WORKERS.push(r.data); WORKERS.sort((a,b)=>a.full_name.localeCompare(b.full_name)); closeForm(); go('labour');
+}
+
+function workerRates(id){
+  const w=WORKERS.find(x=>x.id===id); const rs=WRATES.filter(r=>r.worker_id===id).sort((a,b)=>a.effective_from<b.effective_from?1:-1);
+  const box=document.createElement('div'); box.className='modal-bg'; box.id='modalBg';
+  box.innerHTML=`<div class="modal" style="max-width:640px"><div class="modal-h"><h3>Cost rates · ${esc(w.full_name)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">Use the <b>loaded</b> rate: pay plus employer’s NI, pension and holiday. Rates are never edited — a new rate starts from a date, so hours already costed keep the rate in force at the time.</div>
+      <table class="tbl"><thead><tr><th>From</th><th>To</th><th>Rate</th><th>Overtime</th><th>Note</th></tr></thead><tbody>${rs.map(r=>`<tr><td>${jobDate(r.effective_from)}</td><td>${r.effective_to?jobDate(r.effective_to):'<b>current</b>'}</td><td>${rateText(r)}${r.rate_basis==='day'?` <span class="muted">(${Number(r.standard_day_hours)}h day)</span>`:''}</td><td>×${Number(r.overtime_multiplier)}</td><td>${esc(r.note||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">No rate yet.</td></tr>'}</tbody></table>
+      ${jobCan('cost_rates.edit')?`<div style="font-weight:700;margin:14px 0 6px">New rate</div>
+      <div class="frow"><div class="fld"><label>Basis</label><select id="wr_basis" onchange="el('wr_day_row').style.display=this.value==='day'?'':'none'"><option value="hour">Per hour</option><option value="day">Per day</option></select></div>
+      <div class="fld"><label>Loaded rate <span class="req">*</span></label><input id="wr_rate" type="number" min="0" step="0.01"></div>
+      <div class="fld"><label>Currency</label><select id="wr_cur"><option>GBP</option><option>EUR</option><option>USD</option></select></div></div>
+      <div class="frow"><div class="fld"><label>Starts from <span class="req">*</span></label><input id="wr_from" type="date" value="${ymd(new Date())}"></div>
+      <div class="fld"><label>Overtime multiplier</label><input id="wr_ot" type="number" min="1" step="0.05" value="1.5"></div>
+      <div class="fld" id="wr_day_row" style="display:none"><label>Hours in a day</label><input id="wr_dayh" type="number" min="1" step="0.5" value="8"></div></div>
+      <div class="fld"><label>Note</label><input id="wr_note" placeholder="e.g. 2027 pay review"></div>`:''}
+    </div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Close</button>${jobCan('cost_rates.edit')?`<button class="btn" onclick="workerRateSave('${id}')">Add rate</button>`:''}</div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(box);
+}
+async function workerRateSave(id){
+  const rate=Number(el('wr_rate').value); if(!(rate>0)) return msg('Enter the loaded rate.','err');
+  const from=el('wr_from').value; if(!from) return msg('Enter the start date.','err');
+  const r=await sb.from('worker_cost_rates').insert({worker_id:id, rate_basis:el('wr_basis').value, rate, currency:el('wr_cur').value,
+    effective_from:from, overtime_multiplier:Number(el('wr_ot').value||1.5), standard_day_hours:Number(el('wr_dayh').value||8), note:el('wr_note').value.trim()||null}).select();
+  if(r.error) return msg('Not saved: '+poFriendlyError(r.error),'err');
+  WRATES=await jobFetchAll(()=>sb.from('worker_cost_rates').select('*').order('effective_from'));
+  closeForm(); workerRates(id); msg('✓ Rate added.','ok'); const t=el('workerTable'); if(t) t.innerHTML=workerTableHtml();
+}
+
+/* ---------- labour on a job (inside the job) ---------- */
+let JLAB={job:null, rows:[]};
+async function jobLoadLabour(j){
+  const box=el('jobLabour'); if(!box) return;
+  try{ await poEnsurePerms(); }catch(e){}
+  if(!jobCan('cost_rates.view')){ box.innerHTML=''; return; }
+  if(WORKERS===null){ try{ WORKERS=await jobFetchAll(()=>sb.from('workers').select('*').order('full_name')); }catch(e){ WORKERS=[]; } }
+  const r=await sb.from('labour_entries').select('*').eq('job_id',j.id).order('work_date').order('created_at');
+  if(r.error){ box.innerHTML=`<div class="muted">Could not load labour: ${esc(r.error.message)}</div>`; return; }
+  JLAB={job:j, rows:r.data||[]};
+  jobRenderLabour();
+}
+function jobRenderLabour(){
+  const box=el('jobLabour'); if(!box) return;
+  const j=JLAB.job, rows=JLAB.rows, cur=j.currency, can=jobCan('labour.enter') && !j.archived_at && !['closed','cancelled'].includes(j.status);
+  const live=rows.filter(x=>x.status!=='void');
+  const proposed=live.filter(x=>x.status==='proposed');
+  // summaries
+  const emp=live.filter(x=>x.status==='confirmed'&&x.worker_type==='employed');
+  const empH=emp.reduce((a,x)=>a+Number(x.hours)+Number(x.ot_hours),0), empC=emp.reduce((a,x)=>a+Number(x.cost_amount),0);
+  const bySup={};
+  live.filter(x=>x.status==='confirmed'&&['agency','self_employed'].includes(x.worker_type)).forEach(x=>{ const w=(WORKERS||[]).find(y=>y.id===x.worker_id)||{}; const k=w.supplier_id||'none'; bySup[k]=(bySup[k]||0)+Number(x.hours)+Number(x.ot_hours); });
+  const supText=Object.keys(bySup).map(k=>`${esc(k==='none'?'(no agency set)':(poSupplier(k).name||'?'))}: <b>${bySup[k]}h</b>`).join(' · ');
+  const row=x=>{ const w=(WORKERS||[]).find(y=>y.id===x.worker_id)||{}; const t=x.worker_type||w.worker_type; const ed=can&&x.status==='proposed';
+    return `<tr${x.status==='void'?' style="opacity:.5;text-decoration:line-through"':''}>
+      <td style="white-space:nowrap">${jobDate(x.work_date)}</td><td>${esc(w.full_name||'')}<div>${workerTypeChip(t)}</div></td>
+      <td>${ed?`<input type="number" min="0" max="24" step="0.25" style="width:70px" value="${Number(x.hours)}" onchange="labSet('${x.id}','hours',this.value)">`:Number(x.hours)}</td>
+      <td>${ed?`<input type="number" min="0" max="24" step="0.25" style="width:70px" value="${Number(x.ot_hours)}" onchange="labSet('${x.id}','ot_hours',this.value)">`:Number(x.ot_hours)}</td>
+      <td style="font-size:12px">${x.source==='manual'?'Entered':(x.source==='shift_report'?'Shift report':'Call-out report')}</td>
+      <td>${x.status==='proposed'?'<span class="chip amber">To confirm</span>':x.status==='confirmed'?'<span class="chip green">Confirmed</span>':'<span class="chip grey">Void</span>'}</td>
+      <td style="text-align:right;white-space:nowrap">${x.status==='confirmed'?(t==='employed'?jobMoney(x.cost_amount,cur):'<span class="muted">invoice</span>'):''}</td>
+      <td style="white-space:nowrap">${can&&x.status==='proposed'?`<button class="btn-ghost" style="padding:3px 8px" onclick="labConfirm(['${x.id}'])">Confirm</button> <button class="btn-ghost" style="padding:3px 8px" onclick="labVoid('${x.id}')">✕</button>`:''}${can&&x.status==='confirmed'?`<button class="btn-ghost" style="padding:3px 8px" onclick="labVoid('${x.id}')">Void</button>`:''}</td></tr>`; };
+  box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap"><div style="font-weight:700;flex:1">Labour</div>
+      ${can?`<button class="btn-ghost" onclick="labImport()">⤓ Import from reports</button><button class="btn-ghost" onclick="labAddForm()">＋ Add hours</button>`:''}
+      ${can&&proposed.length?`<button class="btn" onclick="labConfirm(${esc(JSON.stringify(proposed.map(x=>x.id)))})">Confirm all (${proposed.length})</button>`:''}</div>
+    <div id="labMsg" class="muted" style="font-size:12.5px;margin-bottom:6px"></div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Date</th><th>Person</th><th>Hours</th><th>Overtime</th><th>From</th><th>Status</th><th style="text-align:right">Cost</th><th></th></tr></thead>
+      <tbody>${rows.map(row).join('')||'<tr><td colspan="8" class="muted">No hours yet. Import them from this job’s shift and call-out reports, or add them.</td></tr>'}</tbody></table>
+      <div style="padding:8px 4px;font-size:13px">Employed: <b>${empH}h</b> costing <b>${jobMoney(empC,cur)}</b>${supText?` · Agency / self-employed hours (to check against their invoices): ${supText}`:''}</div></div>`;
+}
+async function labRefresh(){ await jobLoadLabour(JLAB.job); if(typeof jobLoadCosts==='function') jobLoadCosts(JLAB.job); }
+function labSay(t,bad){ const m=el('labMsg'); if(m){ m.textContent=t; m.style.color=bad?'var(--red)':''; } }
+async function labSet(id,f,v){
+  const r=await sb.from('labour_entries').update({[f]:Number(v||0)}).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length){ labSay('Not saved: '+(r.error?poFriendlyError(r.error):'no permission'),true); return; }
+  const i=JLAB.rows.findIndex(x=>x.id===id); JLAB.rows[i]=r.data[0];
+}
+async function labConfirm(ids){
+  let ok=0; const errs=[];
+  for(const id of ids){
+    const r=await sb.from('labour_entries').update({status:'confirmed'}).eq('id',id).select();
+    if(r.error||!r.data||!r.data.length) errs.push(r.error?poFriendlyError(r.error):'no permission'); else ok++;
+  }
+  await labRefresh();
+  labSay(errs.length?`${ok} confirmed. Not confirmed: ${[...new Set(errs)].join(' · ')}`:`✓ ${ok} confirmed.`, errs.length>0);
+}
+async function labVoid(id){
+  const x=JLAB.rows.find(r=>r.id===id);
+  let reason='Removed before confirming';
+  if(x.status==='confirmed'){ reason=prompt('Void these hours? They stay on record but no longer count.\n\nReason:'); if(reason===null) return; if(!reason.trim()){ alert('A reason is needed.'); return; } }
+  const r=await sb.from('labour_entries').update({status:'void', void_reason:reason.trim()}).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length){ labSay('Not voided: '+(r.error?poFriendlyError(r.error):'no permission'),true); return; }
+  await labRefresh();
+}
+async function labImport(){
+  labSay('Looking through this job’s reports…');
+  const r=await sb.rpc('propose_labour_from_reports',{p_job:JLAB.job.id});
+  if(r.error){ labSay('Import failed: '+poFriendlyError(r.error),true); return; }
+  await jobLoadLabour(JLAB.job);
+  const d=r.data||{}; const un=(d.unmatched||[]);
+  labSay(`Checked ${d.reports||0} report(s): ${d.created||0} new entr${(d.created===1)?'y':'ies'} to confirm.${un.length?` Names not recognised (add them in Labour & rates, or add their hours by hand): ${un.join(', ')}.`:''} Reports give one hours figure — check each person’s hours before confirming.`, false);
+}
+function labAddForm(){
+  const people=(WORKERS||[]).filter(w=>w.active);
+  const box=document.createElement('div'); box.className='modal-bg'; box.id='labModal'; box.style.zIndex=1001;
+  box.innerHTML=`<div class="modal" style="max-width:520px"><div class="modal-h"><h3>Add hours · ${esc(JLAB.job.job_ref)}</h3><button class="modal-x" onclick="el('labModal').remove()">✕</button></div>
+    <div class="modal-b">
+      <div class="fld"><label>Person <span class="req">*</span></label><select id="la_w"><option value="">— choose —</option>${people.map(w=>`<option value="${w.id}">${esc(w.full_name)} · ${esc((WORKER_TYPES.find(t=>t[0]===w.worker_type)||[,''])[1])}</option>`).join('')}</select></div>
+      <div class="frow"><div class="fld"><label>Date <span class="req">*</span></label><input id="la_d" type="date" value="${ymd(new Date())}"></div>
+      <div class="fld"><label>Hours</label><input id="la_h" type="number" min="0" max="24" step="0.25" value="8"></div>
+      <div class="fld"><label>Overtime hours</label><input id="la_ot" type="number" min="0" max="24" step="0.25" value="0"></div></div>
+      <div class="fld"><label>Note</label><input id="la_n"></div></div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="el('labModal').remove()">Cancel</button><button class="btn" onclick="labAddSave()">Add</button></div>
+    <div class="savemsg" id="laMsg" style="padding:0 18px 14px"></div></div>`;
+  document.body.appendChild(box);
+}
+async function labAddSave(){
+  const say=t=>{ el('laMsg').textContent=t; };
+  const w=el('la_w').value, d=el('la_d').value, h=Number(el('la_h').value||0), ot=Number(el('la_ot').value||0);
+  if(!w) return say('Choose the person.'); if(!d) return say('Enter the date.'); if(h+ot<=0) return say('Enter the hours.');
+  const r=await sb.from('labour_entries').insert({job_id:JLAB.job.id, worker_id:w, work_date:d, hours:h, ot_hours:ot, note:el('la_n').value.trim()||null}).select();
+  if(r.error) return say('Not saved: '+poFriendlyError(r.error));
+  el('labModal').remove(); await labRefresh(); labSay('✓ Added — confirm it to count it.');
 }
 </script>
 </body>
