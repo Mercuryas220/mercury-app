@@ -704,6 +704,7 @@ function renderShell(){
       <button class="nav-btn" data-page="hq"><span class="ic">🏠</span> HQ Overview ${att?`<span class="nav-badge">${att}</span>`:''}</button>
       <button class="nav-btn" data-page="digest"><span class="ic">📨</span> Daily Digest</button>
       <button class="nav-btn" data-page="clients"><span class="ic">🗂</span> Clients</button>
+      <button class="nav-btn" data-page="commercial"><span class="ic">📊</span> Commercial</button>
       <button class="nav-btn" data-page="quotereg"><span class="ic">📝</span> Quotes</button>
       <button class="nav-btn" data-page="jobreg"><span class="ic">📋</span> Jobs</button>
       <button class="nav-btn" data-page="poreg"><span class="ic">🧾</span> Purchase orders</button>
@@ -5032,6 +5033,7 @@ function go(page){
     else if(page==='quotereg')html=pageQuoteRegister();
     else if(page==='poreg')html=pagePOs();
     else if(page==='labour')html=pageLabour();
+    else if(page==='commercial')html=pageCommercial();
     else if(!CLIENT){ html=emptyState('👈','Choose a client','Pick a client from the dropdown above'+(PROFILE.role==='admin'?', the Clients page or HQ':'')+' to open their dashboard.'); }
     else if(page==='command')html=pageCommand();
     else if(page==='checkins')html=pageCheckins();
@@ -5132,6 +5134,7 @@ async function loadJobRegister(){
     ]);
     if(ents.error) throw ents.error;
     JOBREG=jobs; JOBREG_ENTITIES=ents.data||[]; JOBREG_SITES=sites;
+    if(typeof loadJobPnl==='function') await loadJobPnl();
     if(!LOGINS || !LOGINS.length){ try{ await loadLogins(); }catch(e){} }
   }catch(e){ JOBREG_ERR=e.message||String(e); JOBREG=JOBREG||[]; }
   JOBREG_LOADING=false;
@@ -5157,7 +5160,7 @@ function jobSetFilter(k,v){ JOBREG_F[k]=v; const t=el('jobTable'); if(t){ t.inne
 function jobTableHtml(){
   const rows=jobFiltered(); const showVal=true;
   if(!rows.length) return `<div class="empty" style="padding:26px"><div class="big">📋</div><b>No jobs match</b><div style="margin-top:6px;font-size:13px">${(JOBREG||[]).length?'Try a different filter.':'Jobs are created by converting an accepted quote (Quotes → Convert to job).'}</div></div>`;
-  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Q ref</th><th>Job</th><th>Client</th><th>Site</th><th>Co.</th><th>Status</th><th>Dates</th>${showVal?'<th style="text-align:right">Contract value</th>':''}<th></th></tr></thead><tbody>${
+  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Q ref</th><th>Job</th><th>Client</th><th>Site</th><th>Co.</th><th>Status</th><th>Dates</th>${showVal?'<th style="text-align:right">Contract value</th>':''}${jobCan('margins.view')?'<th>P&amp;L</th>':''}<th></th></tr></thead><tbody>${
     rows.map(j=>`<tr${j.archived_at?' style="opacity:.6"':''}>
       <td><b style="white-space:nowrap">${esc(j.job_ref)}</b></td>
       <td>${esc(j.title)}${j.client_po_ref?`<div class="muted" style="font-size:11.5px">PO ${esc(j.client_po_ref)}</div>`:''}</td>
@@ -5167,6 +5170,7 @@ function jobTableHtml(){
       <td>${jobStatusChip(j.status)}${j.archived_at?' <span class="chip grey">Archived</span>':''}</td>
       <td style="white-space:nowrap">${jobDate(j.start_date)}${j.end_date?' – '+jobDate(j.end_date):''}</td>
       ${showVal?`<td style="text-align:right;white-space:nowrap">${jobMoney(j.contract_value,j.currency)}</td>`:''}
+      ${jobCan('margins.view')?`<td style="white-space:nowrap">${typeof JOBPNL!=='undefined'&&JOBPNL[j.id]?ragChip(JOBPNL[j.id].rag)+' <span class="muted" style="font-size:12px">'+pct(JOBPNL[j.id].forecast_margin)+'</span>':''}</td>`:''}
       <td><button class="btn-ghost" style="padding:5px 10px" onclick="openJobForm('${j.id}')">${jobCan('jobs.edit')?'Open':'View'}</button></td>
     </tr>`).join('')}</tbody></table></div>`;
 }
@@ -5221,8 +5225,9 @@ function openJobForm(id){
   const ent=JOBREG_ENTITIES.find(e=>e.code===j.entity_code);
   const managers=(LOGINS||[]).filter(l=>l.role==='admin');
   const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal"><div class="modal-h"><h3>${isNew?'New job':esc(j.job_ref)+' · '+esc(j.title)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+  wrap.innerHTML=`<div class="modal" style="max-width:1040px;width:96vw"><div class="modal-h"><h3>${isNew?'New job':esc(j.job_ref)+' · '+esc(j.title)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
     <div class="modal-b">
+      ${!isNew?`<div id="jobPnl"></div>`:''}
       ${isNew?`<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">The Q reference is issued automatically when you save, and stays with this job for life. The trading company and currency cannot be changed afterwards.</div>`:''}
       ${j.archived_at?`<div class="box" style="background:var(--amber-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Archived</b> ${jobDate(j.archived_at)} — ${esc(j.archive_reason||'')}</div>`:''}
       <div class="frow">
@@ -5255,6 +5260,7 @@ function openJobForm(id){
       ${jobCan('margins.view')&&!isNew?`<div id="jobBudget" style="margin-top:12px"></div>`:''}
       ${!isNew?`<div id="jobCosts" style="margin-top:14px"></div>`:''}
       ${!isNew?`<div id="jobLabour" style="margin-top:14px"></div>`:''}
+      ${!isNew?`<div id="jobVars" style="margin-top:14px"></div>`:''}
     </div>
     <div class="modal-foot">
       ${!isNew&&jobCan('history.view')?`<button class="btn-ghost" onclick="openJobHistory('${j.id}')">History</button>`:''}
@@ -5268,6 +5274,8 @@ function openJobForm(id){
   if(jobCan('margins.view') && !isNew) jobLoadBudget(j);
   if(!isNew && typeof jobLoadCosts==='function') jobLoadCosts(j);
   if(!isNew && typeof jobLoadLabour==='function') jobLoadLabour(j);
+  if(!isNew && typeof jobLoadPnl==='function') jobLoadPnl(j);
+  if(!isNew && typeof jobLoadVariations==='function') jobLoadVariations(j);
 }
 
 async function jobLoadBudget(j){
@@ -6288,20 +6296,29 @@ async function jobLoadCosts(j){
     sb.from('purchase_orders').select('*').eq('job_id',j.id).order('created_at'),
     sb.from('job_other_costs').select('*').eq('job_id',j.id).order('cost_date')]);
   if(pos.error){ box.innerHTML=`<div class="muted">Could not load costs: ${esc(pos.error.message)}</div>`; return; }
-  const cur=j.currency, showBudget=jobCan('margins.view');
-  let tb=0,tc=0,ta=0;
-  const rows=(pos.data||[]).map(r=>{ tb+=Number(r.original_budget); tc+=Number(r.committed); ta+=Number(r.actual);
-    const left=Number(r.original_budget)-Number(r.committed_and_actual);
-    return `<tr><td>${esc(r.cost_code)}</td>${showBudget?`<td style="text-align:right">${jobMoney(r.original_budget,cur)}</td>`:''}<td style="text-align:right">${jobMoney(r.committed,cur)}</td><td style="text-align:right">${jobMoney(r.actual,cur)}</td>${showBudget?`<td style="text-align:right;color:${left<0?'var(--red)':'inherit'}">${jobMoney(left,cur)}</td>`:''}</tr>`; }).join('');
-  const totLeft=tb-tc-ta;
+  const cur=j.currency, showBudget=jobCan('margins.view'), canFc=jobCan('forecast.enter') && !['complete','ready_to_invoice','invoiced','closed','cancelled'].includes(j.status);
+  const R=v=>`<td style="text-align:right">${jobMoney(v,cur)}</td>`;
+  let tb=0,tc=0,ta=0,tf=0,tff=0;
+  const rows=(pos.data||[]).map(r=>{ tc+=Number(r.committed); ta+=Number(r.actual);
+    if(!showBudget) return `<tr><td>${esc(r.cost_code)}</td>${R(r.committed)}${R(r.actual)}</tr>`;
+    tb+=Number(r.revised_budget); tf+=Number(r.forecast_additional); tff+=Number(r.forecast_final);
+    const v=Number(r.revised_budget)-Number(r.forecast_final);
+    return `<tr><td>${esc(r.cost_code)}</td>${R(r.revised_budget)}${R(r.committed)}${R(r.actual)}
+      <td style="text-align:right;white-space:nowrap">${jobMoney(r.forecast_additional,cur)}${r.forecast_is_entered?' <span class="muted" title="Entered forecast">✎</span>':''}${canFc?` <button class="btn-ghost" style="padding:2px 7px" title="Set forecast" onclick="jobSetForecast('${j.id}','${esc(r.cost_code)}',${Number(r.forecast_additional)})">Edit</button>`:''}</td>
+      ${R(r.forecast_final)}<td style="text-align:right;color:${v<0?'var(--red)':'inherit'}">${jobMoney(v,cur)}</td></tr>`; }).join('');
+  const head=showBudget
+    ? '<tr><th>Cost code</th><th style="text-align:right">Approved budget</th><th style="text-align:right">Committed (on order)</th><th style="text-align:right">Actual (invoiced)</th><th style="text-align:right">Forecast to complete</th><th style="text-align:right">Forecast final</th><th style="text-align:right">Variance</th></tr>'
+    : '<tr><th>Cost code</th><th style="text-align:right">Committed (on order)</th><th style="text-align:right">Actual (invoiced)</th></tr>';
+  const tot=!rows?'':(showBudget
+    ? `<tr><td><b>Total</b></td><td style="text-align:right"><b>${jobMoney(tb,cur)}</b></td><td style="text-align:right"><b>${jobMoney(tc,cur)}</b></td><td style="text-align:right"><b>${jobMoney(ta,cur)}</b></td><td style="text-align:right"><b>${jobMoney(tf,cur)}</b></td><td style="text-align:right"><b>${jobMoney(tff,cur)}</b></td><td style="text-align:right;color:${tb-tff<0?'var(--red)':'inherit'}"><b>${jobMoney(tb-tff,cur)}</b></td></tr>`
+    : `<tr><td><b>Total</b></td><td style="text-align:right"><b>${jobMoney(tc,cur)}</b></td><td style="text-align:right"><b>${jobMoney(ta,cur)}</b></td></tr>`);
   const poRows=(pos2.data||[]).map(p=>`<tr><td><a href="#" onclick="event.preventDefault();closeForm();openPO('${p.id}')"><b>${esc(p.po_ref)}</b></a></td><td>${esc(poSupplier(p.supplier_id).name||'')}</td><td>${esc(p.description)}</td><td>${poStatusChip(p.status)}</td><td style="text-align:right">${jobMoney(p.total,p.currency)}</td></tr>`).join('');
   const otherRows=(other.data||[]).map(o=>`<tr${o.status==='void'?' style="opacity:.55;text-decoration:line-through"':''}><td>${jobDate(o.cost_date)}</td><td>${esc(o.cost_code)}</td><td>${esc((OTHER_SOURCES.find(s=>s[0]===o.source)||[,o.source])[1])}</td><td>${esc(o.description)}${o.supplier_name?' · '+esc(o.supplier_name):''}</td><td style="text-align:right">${jobMoney(o.amount,cur)}</td><td>${o.status==='void'?'Void':(jobCan('costs.enter')?`<button class="btn-ghost" style="padding:3px 8px" onclick="jobVoidCost('${o.id}','${j.id}')">Void</button>`:'')}</td></tr>`).join('');
   const canAct=!j.archived_at && !['closed','cancelled'].includes(j.status);
   box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="font-weight:700;flex:1">Costs</div>
       ${canAct&&jobCan('po.create')?`<button class="btn-ghost" onclick="closeForm();openPO(null,'${j.id}')">＋ Raise PO</button>`:''}
       ${canAct&&jobCan('costs.enter')?`<button class="btn-ghost" onclick="jobOtherCostForm('${j.id}')">＋ Other cost</button>`:''}</div>
-    <div class="card" style="padding:6px 8px"><table class="tbl"><thead><tr><th>Cost code</th>${showBudget?'<th style="text-align:right">Original budget</th>':''}<th style="text-align:right">Committed (on order)</th><th style="text-align:right">Actual (invoiced)</th>${showBudget?'<th style="text-align:right">Budget left</th>':''}</tr></thead><tbody>${rows||'<tr><td colspan="5" class="muted">No costs yet.</td></tr>'}
-      ${rows?`<tr><td><b>Total</b></td>${showBudget?`<td style="text-align:right"><b>${jobMoney(tb,cur)}</b></td>`:''}<td style="text-align:right"><b>${jobMoney(tc,cur)}</b></td><td style="text-align:right"><b>${jobMoney(ta,cur)}</b></td>${showBudget?`<td style="text-align:right;color:${totLeft<0?'var(--red)':'inherit'}"><b>${jobMoney(totLeft,cur)}</b></td>`:''}</tr>`:''}</tbody></table>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead>${head}</thead><tbody>${rows||'<tr><td colspan="7" class="muted">No costs yet.</td></tr>'}${tot}</tbody></table>
       <div class="muted" style="font-size:11.5px;padding:6px 4px">Committed = ordered on open POs but not yet invoiced. When the invoice is entered it moves to actual, so nothing is counted twice.</div></div>
     ${poRows?`<div style="font-weight:700;margin:10px 0 4px">Purchase orders</div><div class="card" style="padding:6px 8px"><table class="tbl"><thead><tr><th>PO</th><th>Supplier</th><th>Order</th><th>Status</th><th style="text-align:right">Total</th></tr></thead><tbody>${poRows}</tbody></table></div>`:''}
     ${otherRows?`<div style="font-weight:700;margin:10px 0 4px">Other costs</div><div class="card" style="padding:6px 8px"><table class="tbl"><thead><tr><th>Date</th><th>Code</th><th>Type</th><th>Description</th><th style="text-align:right">Net</th><th></th></tr></thead><tbody>${otherRows}</tbody></table></div>`:''}`;
@@ -6567,6 +6584,283 @@ async function labAddSave(){
   const r=await sb.from('labour_entries').insert({job_id:JLAB.job.id, worker_id:w, work_date:d, hours:h, ot_hours:ot, note:el('la_n').value.trim()||null}).select();
   if(r.error) return say('Not saved: '+poFriendlyError(r.error));
   el('labModal').remove(); await labRefresh(); labSay('✓ Added — confirm it to count it.');
+}
+/* ===================================================================
+   COMMERCIAL  —  Phase 4a. Variations, forecasts, each job's P&L with
+   red / orange / green, and the commercial dashboard.
+   RED: forecast margin below expected margin (quote + approved variations)
+        or a forecast loss. ORANGE: margin holds but committed + actual
+        has reached 95% of the approved budget. GREEN: otherwise.
+   =================================================================== */
+
+let JOBPNL={}, COMM=null, COMM_ERR=null, COMM_LOADING=false;
+let COMM_F={entity:'all', client:'all', from:'', to:''};
+let VEDIT=null;
+
+TITLES.commercial='Commercial dashboard';
+
+const RAG_TEXT={red:'Red — below expected margin', orange:'Orange — budget nearly used', green:'Green — on track'};
+function ragChip(r){ if(!r) return ''; const c=r==='red'?'red':r==='orange'?'amber':'green'; return `<span class="chip ${c}" title="${esc(RAG_TEXT[r]||'')}">${r==='red'?'Red':r==='orange'?'Orange':'Green'}</span>`; }
+function pct(v){ return v==null?'—':(Number(v)*100).toFixed(1)+'%'; }
+const VAR_STATUS=[['draft','Draft','grey'],['submitted','With client','cyan'],['approved','Approved','green'],['rejected','Rejected','red'],['withdrawn','Withdrawn','grey']];
+function varChip(v){ const x=VAR_STATUS.find(s=>s[0]===v.status)||[v.status,v.status,'grey']; return `<span class="chip ${x[2]}">${x[1]}</span>${v.at_risk&&['draft','submitted'].includes(v.status)?' <span class="chip amber" title="Work started before client approval">At risk</span>':''}`; }
+
+async function loadJobPnl(){
+  JOBPNL={};
+  if(!jobCan('margins.view')) return;
+  try{ const rows=await jobFetchAll(()=>sb.from('job_pnl').select('*')); rows.forEach(r=>JOBPNL[r.job_id]=r); }catch(e){ console.warn('pnl',e); }
+}
+
+/* ---------- P&L block inside the job ---------- */
+async function jobLoadPnl(j){
+  const box=el('jobPnl'); if(!box) return;
+  try{ await poEnsurePerms(); }catch(e){}
+  if(!jobCan('margins.view')){ box.innerHTML=''; return; }
+  const r=await sb.from('job_pnl').select('*').eq('job_id',j.id).maybeSingle();
+  if(r.error||!r.data){ box.innerHTML=r.error?`<div class="muted">P&L unavailable: ${esc(r.error.message)}</div>`:''; return; }
+  const p=r.data, cur=j.currency, m=v=>jobMoney(v,cur); JOBPNL[j.id]=p;
+  const cell=(l,v,s)=>`<div style="min-width:130px"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em">${l}</div><div style="font-weight:700;font-size:15px${s?';'+s:''}">${v}</div></div>`;
+  const final=['closed','invoiced'].includes(p.status);
+  box.innerHTML=`<div class="card" style="padding:12px 14px;margin-bottom:14px;border-left:4px solid ${p.rag==='red'?'var(--red)':p.rag==='orange'?'var(--amber)':'var(--green)'}">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><b style="flex:1">Job P&amp;L</b>${ragChip(p.rag)}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:14px 22px">
+      ${cell('Original value',m(p.original_value))}${cell('Approved variations',m(p.approved_variations))}${cell('Revised value',m(p.revised_value))}
+      ${Number(p.pending_variations)?cell('Pending variations',m(p.pending_variations)+(Number(p.at_risk_variations)?` <span style="font-size:12px;color:var(--amber)">(${m(p.at_risk_variations)} at risk)</span>`:'')):''}
+    </div><div style="display:flex;flex-wrap:wrap;gap:14px 22px;margin-top:10px">
+      ${cell('Original budget',m(p.original_budget))}${cell('Approved budget',m(p.revised_budget))}${cell('Committed + actual',m(Number(p.committed)+Number(p.actual)))}
+      ${cell('Forecast final cost',m(p.forecast_final_cost))}
+    </div><div style="display:flex;flex-wrap:wrap;gap:14px 22px;margin-top:10px">
+      ${cell('Quoted margin',pct(p.quoted_margin))}${cell('Expected margin',pct(p.expected_margin))}
+      ${cell('Forecast gross profit',m(p.forecast_gp),Number(p.forecast_gp)<0?'color:var(--red)':'')}${cell('Forecast margin',pct(p.forecast_margin),p.rag==='red'?'color:var(--red)':'')}
+      ${final?cell('Final gross profit',m(p.final_gp)):''}
+    </div></div>`;
+}
+
+/* ---------- forecasts ---------- */
+async function jobSetForecast(jobId, code, current){
+  const amt=prompt(`Forecast to complete for ${code}: further cost expected on this job that is NOT yet ordered or invoiced (${(JOBREG||[]).find(x=>x.id===jobId)?.currency||''}, excl. VAT).\n\nCurrently ${current}.`, String(current));
+  if(amt===null) return; const n=Number(amt); if(isNaN(n)||n<0){ alert('Enter 0 or a positive amount.'); return; }
+  const reason=prompt('Reason for this forecast (kept in the history):'); if(reason===null) return;
+  if(!reason.trim()){ alert('A reason is needed.'); return; }
+  const r=await sb.from('job_forecast_entries').insert({job_id:jobId, cost_code:code, amount:n, reason:reason.trim()}).select();
+  if(r.error){ alert('Not saved: '+poFriendlyError(r.error)); return; }
+  const j=(JOBREG||[]).find(x=>x.id===jobId); if(j){ jobLoadCosts(j); jobLoadPnl(j); }
+}
+
+/* ---------- variations on the job ---------- */
+async function jobLoadVariations(j){
+  const box=el('jobVars'); if(!box) return;
+  try{ await poEnsurePerms(); }catch(e){}
+  if(!jobCan('jobs.view')){ box.innerHTML=''; return; }
+  const r=await sb.from('job_variations').select('*').eq('job_id',j.id).order('var_seq');
+  if(r.error){ box.innerHTML=`<div class="muted">Could not load variations: ${esc(r.error.message)}</div>`; return; }
+  const can=jobCan('variations.raise') && !j.archived_at && !['closed','cancelled'].includes(j.status);
+  const showCost=jobCan('margins.view'), cur=j.currency;
+  const rows=(r.data||[]).map(v=>`<tr><td style="white-space:nowrap"><a href="#" onclick="event.preventDefault();openVariation('${v.id}')"><b>${esc(v.var_ref)}</b></a></td><td>${esc(v.title)}<div class="muted" style="font-size:11.5px">${esc(v.var_type)}</div></td><td>${varChip(v)}</td>
+     <td style="text-align:right">${jobMoney(v.sell_total,cur)}</td>${showCost?`<td style="text-align:right">${jobMoney(v.cost_total,cur)}</td><td style="text-align:right">${Number(v.sell_total)?((Number(v.sell_total)-Number(v.cost_total))/Number(v.sell_total)*100).toFixed(1)+'%':'—'}</td>`:''}</tr>`).join('');
+  box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="font-weight:700;flex:1">Variations</div>${can?`<button class="btn-ghost" onclick="openVariation(null,'${j.id}')">＋ New variation</button>`:''}</div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Number</th><th>Variation</th><th>Status</th><th style="text-align:right">Selling value</th>${showCost?'<th style="text-align:right">Cost</th><th style="text-align:right">Margin</th>':''}</tr></thead>
+      <tbody>${rows||'<tr><td colspan="6" class="muted">No variations.</td></tr>'}</tbody></table>
+      <div class="muted" style="font-size:11.5px;padding:6px 4px">Only client-approved variations change the contract value and budget. Mark “at risk” if work starts before the client approves.</div></div>`;
+}
+
+async function openVariation(id, jobId){
+  try{ await poEnsurePerms(); if(!COSTCODES.length){ const c=await sb.from('cost_codes').select('*').eq('active',true).order('sort_order'); COSTCODES=c.data||[]; } }catch(e){}
+  if(!id){ VEDIT={v:{job_id:jobId, status:'draft', var_type:'addition', at_risk:false}, lines:[], orig:[]}; return renderVarModal(); }
+  const v=await sb.from('job_variations').select('*').eq('id',id).single();
+  if(v.error){ alert('Could not load: '+v.error.message); return; }
+  let lines=[];
+  if(jobCan('margins.view')){ const l=await sb.from('variation_lines').select('*').eq('variation_id',id).order('sort_order'); lines=l.data||[]; }
+  VEDIT={v:v.data, lines:lines.map(x=>({...x})), orig:lines.map(x=>x.id)};
+  renderVarModal();
+}
+function renderVarModal(){
+  const v=VEDIT.v, isNew=!v.id, j=(JOBREG||[]).find(x=>x.id===v.job_id)||poJob(v.job_id)||{}, cur=j.currency;
+  const can=jobCan('variations.raise'), ed=can && v.status==='draft', dis=ed?'':'disabled', costEd=ed&&jobCan('margins.view');
+  const old=el('modalBg'); if(old) old.remove();
+  const lineRow=(l,i)=>costEd
+    ? `<tr><td><select data-i="${i}" data-f="cost_code" style="min-width:86px" onchange="varLine(this)">${COSTCODES.map(c=>`<option ${c.code===l.cost_code?'selected':''}>${esc(c.code)}</option>`).join('')}</select></td>
+       <td><input data-i="${i}" data-f="description" value="${esc(l.description||'')}" oninput="varLine(this)" placeholder="What is added or omitted"></td>
+       <td><input data-i="${i}" data-f="cost" type="number" step="0.01" style="width:110px" value="${esc(l.cost??'')}" oninput="varLine(this)"></td>
+       <td><input data-i="${i}" data-f="sell" type="number" step="0.01" style="width:110px" value="${esc(l.sell??'')}" oninput="varLine(this)"></td>
+       <td><button class="btn-ghost" style="padding:4px 8px;color:var(--red)" onclick="VEDIT.lines.splice(${i},1);renderVarModal()">✕</button></td></tr>`
+    : `<tr><td>${esc(l.cost_code)}</td><td>${esc(l.description)}</td><td style="text-align:right">${jobMoney(l.cost,cur)}</td><td style="text-align:right">${jobMoney(l.sell,cur)}</td><td></td></tr>`;
+  const tc=VEDIT.lines.reduce((a,l)=>a+Number(l.cost||0),0), ts=VEDIT.lines.reduce((a,l)=>a+Number(l.sell||0),0);
+  const b=[];
+  if(!isNew && can){
+    if(v.status==='draft') b.push(`<button class="btn-ghost" onclick="varStatus('submitted')">Mark sent to client</button>`);
+    if(['draft','submitted'].includes(v.status)) b.push(`<button class="btn" onclick="varApproveForm()">Record client approval</button>`);
+    if(v.status==='submitted') b.push(`<button class="btn-ghost" onclick="varStatus('draft')">Reopen to re-price</button>`,`<button class="btn-ghost" style="color:var(--red)" onclick="varClose('rejected')">Rejected</button>`);
+    if(['draft','submitted'].includes(v.status)) b.push(`<button class="btn-ghost" style="color:var(--red)" onclick="varClose('withdrawn')">Withdraw</button>`);
+  }
+  b.push(`<button class="btn-ghost" onclick="closeForm();${v.job_id?`openJobForm('${v.job_id}')`:''}">${ed||isNew?'Cancel':'Back to job'}</button>`);
+  if((ed||isNew)&&can) b.push(`<button class="btn" id="vSave" onclick="varSave()">${isNew?'Create variation':'Save'}</button>`);
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:900px"><div class="modal-h"><h3>${isNew?'New variation · '+esc(j.job_ref||''):esc(v.var_ref)+' · '+esc(v.title)} ${isNew?'':varChip(v)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      ${v.status==='approved'?`<div class="box" style="background:var(--green-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Approved by the client</b> ${jobDate(v.approved_on)}${v.approved_by_name?' — '+esc(v.approved_by_name):''} · ${v.approval_method==='purchase_order'?'PO '+esc(v.client_ref||''):'written confirmation'+(v.client_ref?' '+esc(v.client_ref):'')}${v.approval_note?' · '+esc(v.approval_note):''}</div>`:''}
+      ${['rejected','withdrawn'].includes(v.status)?`<div class="box" style="background:var(--panel2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>${v.status==='rejected'?'Rejected':'Withdrawn'}</b> — ${esc(v.closed_reason||'')}</div>`:''}
+      <div class="frow"><div class="fld"><label>Title <span class="req">*</span></label><input id="v_title" ${dis} value="${esc(v.title||'')}" placeholder="e.g. Extra conveyor bend at line 3"></div>
+        <div class="fld"><label>Type</label><select id="v_type" ${dis}>${[['addition','Addition'],['omission','Omission'],['substitution','Substitution']].map(t=>`<option value="${t[0]}" ${t[0]===v.var_type?'selected':''}>${t[1]}</option>`).join('')}</select></div></div>
+      <div class="fld"><label>Description</label><textarea id="v_desc" ${dis} rows="2">${esc(v.description||'')}</textarea></div>
+      <div class="frow"><div class="fld"><label>Instructed by</label><input id="v_by" ${dis} value="${esc(v.instructed_by||'')}"></div>
+        <div class="fld"><label>Instructed on</label><input id="v_on" ${dis} type="date" value="${esc(String(v.instructed_on||'').slice(0,10))}"></div>
+        <div class="fld"><label>Instruction ref (email, site instruction)</label><input id="v_ref" ${dis} value="${esc(v.instruction_ref||'')}"></div></div>
+      <div class="frow"><div class="fld"><label>Programme effect (days)</label><input id="v_days" ${dis} type="number" step="1" value="${esc(v.programme_days??'')}"></div>
+        <div class="fld"><label>&nbsp;</label><label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" id="v_risk" style="width:auto" ${v.at_risk?'checked':''} ${can&&['draft','submitted'].includes(v.status)?'':'disabled'}> Work started before client approval (at risk)</label></div></div>
+      ${isNew?'<div class="muted" style="font-size:12.5px">Create the variation first, then price it.</div>':(jobCan('margins.view')?`<div style="font-weight:700;margin:8px 0 4px">Pricing</div>
+      <div class="card fld" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Code</th><th>Description</th><th>Cost</th><th>Selling price</th><th></th></tr></thead><tbody id="vLines">${VEDIT.lines.map(lineRow).join('')||'<tr><td colspan="5" class="muted">No lines yet.</td></tr>'}</tbody></table>
+        ${costEd?`<div style="padding:8px 4px"><button class="btn-ghost" onclick="VEDIT.lines.push({cost_code:'MAT',description:'',cost:'',sell:''});renderVarModal()">＋ Add line</button> <span class="muted" style="font-size:12px">Use negative amounts for omitted work or a credit.</span></div>`:''}
+        <div id="vSum" style="text-align:right;padding:8px 4px;font-size:14px">Cost <b>${jobMoney(tc,cur)}</b> · Selling <b>${jobMoney(ts,cur)}</b> · Margin <b>${ts?((ts-tc)/ts*100).toFixed(1)+'%':'—'}</b></div></div>`
+        :`<div style="margin-top:8px">Selling value: <b>${jobMoney(v.sell_total,cur)}</b></div>`)}
+    </div>
+    <div class="modal-foot" style="flex-wrap:wrap">${b.join('')}</div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+function varLine(inp){ const l=VEDIT.lines[+inp.dataset.i]; l[inp.dataset.f]=inp.value;
+  const j=(JOBREG||[]).find(x=>x.id===VEDIT.v.job_id)||{}; const tc=VEDIT.lines.reduce((a,x)=>a+Number(x.cost||0),0), ts=VEDIT.lines.reduce((a,x)=>a+Number(x.sell||0),0);
+  el('vSum').innerHTML=`Cost <b>${jobMoney(tc,j.currency)}</b> · Selling <b>${jobMoney(ts,j.currency)}</b> · Margin <b>${ts?((ts-tc)/ts*100).toFixed(1)+'%':'—'}</b>`; }
+async function varSave(){
+  const v=VEDIT.v, isNew=!v.id, val=k=>el(k).value.trim();
+  const head={title:val('v_title'), var_type:val('v_type'), description:val('v_desc')||null, instructed_by:val('v_by')||null,
+    instructed_on:val('v_on')||null, instruction_ref:val('v_ref')||null, programme_days:val('v_days')===''?null:Number(val('v_days')), at_risk:el('v_risk').checked};
+  if(!head.title) return msg('Give the variation a title.','err');
+  for(const [i,l] of VEDIT.lines.entries()){ if(!String(l.description||'').trim()) return msg(`Line ${i+1}: add a description.`,'err'); if(l.cost===''||l.sell==='') return msg(`Line ${i+1}: enter the cost and selling price (0 if none).`,'err'); }
+  const btn=el('vSave'); if(btn) btn.disabled=true;
+  try{
+    let saved;
+    if(isNew){ const r=await sb.from('job_variations').insert({...head, job_id:v.job_id}).select().single(); if(r.error) throw r.error; saved=r.data; }
+    else{
+      const r=await sb.from('job_variations').update(head).eq('id',v.id).select(); if(r.error) throw r.error; if(!r.data||!r.data.length) throw new Error('Not saved — you may not have permission.');
+      const keep=VEDIT.lines.filter(l=>l.id).map(l=>l.id), gone=VEDIT.orig.filter(x=>!keep.includes(x));
+      if(gone.length){ const d=await sb.from('variation_lines').delete().in('id',gone); if(d.error) throw d.error; }
+      for(const [i,l] of VEDIT.lines.entries()){
+        const row={variation_id:v.id, sort_order:i+1, cost_code:l.cost_code, description:String(l.description).trim(), cost:Number(l.cost), sell:Number(l.sell)};
+        const r2=l.id?await sb.from('variation_lines').update(row).eq('id',l.id).select():await sb.from('variation_lines').insert(row).select();
+        if(r2.error) throw r2.error;
+      }
+      saved=v;
+    }
+    await openVariation(saved.id); msg(isNew?`✓ Created ${saved.var_ref} — now price it.`:'✓ Saved.','ok');
+  }catch(e){ msg('Not saved: '+poFriendlyError(e),'err'); if(btn) btn.disabled=false; }
+}
+async function varUpdate(patch, ok){
+  const r=await sb.from('job_variations').update(patch).eq('id',VEDIT.v.id).select();
+  if(r.error){ msg('Not saved: '+poFriendlyError(r.error),'err'); return false; }
+  if(!r.data||!r.data.length){ msg('Not saved — you may not have permission.','err'); return false; }
+  await openVariation(VEDIT.v.id); msg(ok,'ok'); return true;
+}
+async function varStatus(s){ await varUpdate({status:s, at_risk:el('v_risk')?el('v_risk').checked:VEDIT.v.at_risk}, s==='submitted'?'✓ Marked as sent to the client.':'✓ Reopened for re-pricing.'); }
+async function varClose(s){
+  const reason=prompt(s==='rejected'?'Record that the client rejected this variation.\n\nReason:':'Withdraw this variation?\n\nReason:'); if(reason===null) return;
+  if(!reason.trim()){ alert('A reason is needed.'); return; }
+  await varUpdate({status:s, closed_reason:reason.trim()}, s==='rejected'?'✓ Recorded as rejected.':'✓ Withdrawn.');
+}
+function varApproveForm(){
+  const v=VEDIT.v;
+  const box=document.createElement('div'); box.className='modal-bg'; box.id='vaModal'; box.style.zIndex=1001;
+  box.innerHTML=`<div class="modal" style="max-width:560px"><div class="modal-h"><h3>Client approval · ${esc(v.var_ref)}</h3><button class="modal-x" onclick="el('vaModal').remove()">✕</button></div>
+    <div class="modal-b"><div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">Once approved, the variation’s selling price is added to the job’s revised contract value and its cost to the approved budget. It is then locked.</div>
+      <div class="fld"><label>Approved by <span class="req">*</span></label><select id="va_m" onchange="el('va_ref_l').textContent=this.value==='purchase_order'?'Client PO number *':'Client reference (optional)'"><option value="purchase_order">Purchase order</option><option value="written_confirmation">Written confirmation (e.g. email)</option></select></div>
+      <div class="fld"><label id="va_ref_l">Client PO number *</label><input id="va_ref"></div>
+      <div class="frow"><div class="fld"><label>Date <span class="req">*</span></label><input id="va_d" type="date" value="${ymd(new Date())}"></div><div class="fld"><label>Client contact</label><input id="va_n"></div></div>
+      <div class="fld"><label>Note (where the PO or email is filed)</label><input id="va_note"></div></div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="el('vaModal').remove()">Cancel</button><button class="btn" onclick="varApproveSave()">Record approval</button></div>
+    <div class="savemsg" id="vaMsg" style="padding:0 18px 14px"></div></div>`;
+  document.body.appendChild(box);
+}
+async function varApproveSave(){
+  const say=t=>{ el('vaMsg').textContent=t; }, m=el('va_m').value, ref=el('va_ref').value.trim(), d=el('va_d').value, note=el('va_note').value.trim();
+  if(m==='purchase_order'&&!ref) return say('Enter the client’s PO number.'); if(!d) return say('Enter the date.');
+  if(m==='written_confirmation'&&!note&&!ref) return say('Add a reference or a note of where the confirmation is filed.');
+  const r=await sb.from('job_variations').update({status:'approved', approval_method:m, client_ref:ref||null, approved_on:d, approved_by_name:el('va_n').value.trim()||null, approval_note:note||null}).eq('id',VEDIT.v.id).select();
+  if(r.error||!r.data||!r.data.length) return say('Not saved: '+(r.error?poFriendlyError(r.error):'no permission'));
+  el('vaModal').remove(); await openVariation(VEDIT.v.id); msg('✓ Approved — the job’s contract value and budget now include it.','ok');
+}
+
+/* ---------- commercial dashboard ---------- */
+async function loadCommercial(){
+  if(COMM_LOADING) return; COMM_LOADING=true; COMM_ERR=null;
+  try{
+    await poEnsurePerms();
+    if(!JOBREG_ENTITIES.length){ const e=await sb.from('trading_entities').select('*').order('code'); JOBREG_ENTITIES=e.data||[]; }
+    const [q,pnl,pos,vars]=await Promise.all([
+      jobCan('quotes.view')?jobFetchAll(()=>sb.from('quotes').select('id,quote_ref,title,client_id,entity_code,currency,status,total_sell,valid_until,job_id,archived_at,created_at,issued_at')):Promise.resolve([]),
+      jobCan('margins.view')?jobFetchAll(()=>sb.from('job_pnl').select('*')):Promise.resolve([]),
+      jobCan('po.view')?jobFetchAll(()=>sb.from('purchase_orders').select('id,po_ref,job_id,supplier_id,currency,status,total,invoiced,created_at')):Promise.resolve([]),
+      jobCan('jobs.view')?jobFetchAll(()=>sb.from('job_variations').select('id,var_ref,job_id,title,status,sell_total,at_risk,created_at')):Promise.resolve([])]);
+    let labour=[];
+    if(jobCan('cost_rates.view')){ const d=new Date(); const from=ymd(new Date(d.getFullYear(),d.getMonth(),1)); labour=await jobFetchAll(()=>sb.from('labour_entries').select('job_id,cost_amount,hours,ot_hours,worker_type,work_date,status').eq('status','confirmed').gte('work_date',from)); }
+    const jobs=await jobFetchAll(()=>sb.from('jobs').select('id,job_ref,title,client_id,entity_code,currency,status,created_at,archived_at'));
+    COMM={q,pnl,pos,vars,labour,jobs};
+  }catch(e){ COMM_ERR=e.message||String(e); COMM={q:[],pnl:[],pos:[],vars:[],labour:[],jobs:[]}; }
+  COMM_LOADING=false;
+  if(CURRENT==='commercial') go('commercial');
+}
+function commIn(row, dateField){
+  const f=COMM_F;
+  if(f.entity!=='all' && row.entity_code && row.entity_code!==f.entity) return false;
+  if(f.client!=='all' && row.client_id && row.client_id!==f.client) return false;
+  const d=String(row[dateField]||'').slice(0,10);
+  if(f.from && d && d<f.from) return false; if(f.to && d && d>f.to) return false;
+  return true;
+}
+function sumByCur(rows, val, cur){ const o={}; rows.forEach(r=>{ const c=r[cur||'currency']||'GBP'; o[c]=(o[c]||0)+Number(typeof val==='function'?val(r):r[val]||0); }); return Object.keys(o).sort().map(c=>jobMoney(o[c],c).replace(/\.00$/,'')).join(' · ')||'—'; }
+function commSet(k,v){ COMM_F[k]=v; go('commercial'); }
+
+function pageCommercial(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','Only visible to the Mercury team.');
+  if(COMM===null){ loadCommercial(); return emptyState('⏳','Loading the dashboard…','One moment.'); }
+  if(COMM_ERR) return emptyState('⚠','Could not load the dashboard', esc(COMM_ERR)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="COMM=null;go('commercial')">Try again</button></div>`);
+  if(!jobCan('margins.view')) return emptyState('🔒','Directors and Commercial only','The commercial dashboard shows margins and profit.');
+  const jobById={}; COMM.jobs.forEach(j=>jobById[j.id]=j);
+  const withJob=r=>({...r, entity_code:(jobById[r.job_id]||{}).entity_code, client_id:(jobById[r.job_id]||{}).client_id, job_created:(jobById[r.job_id]||{}).created_at});
+  const quotes=COMM.q.filter(x=>!x.archived_at && commIn(x,'created_at'));
+  const live=quotes.filter(x=>['pending','issued'].includes(x.status));
+  const awaiting=quotes.filter(x=>x.status==='accepted'&&!x.job_id);
+  const pnl=COMM.pnl.filter(p=>!p.archived_at).map(p=>({...p, created_at:(jobById[p.job_id]||{}).created_at})).filter(p=>commIn(p,'created_at'));
+  const active=pnl.filter(p=>['created','mobilising','live','complete','ready_to_invoice'].includes(p.status));
+  const red=active.filter(p=>p.rag==='red'), orange=active.filter(p=>p.rag==='orange');
+  const over=active.filter(p=>Number(p.committed)+Number(p.actual)>Number(p.revised_budget)&&Number(p.revised_budget)>0);
+  const toInvoice=pnl.filter(p=>['complete','ready_to_invoice'].includes(p.status));
+  const openPOs=COMM.pos.map(withJob).filter(p=>['open','part_invoiced'].includes(p.status)&&commIn(p,'created_at'));
+  const pendVars=COMM.vars.map(withJob).filter(v=>['draft','submitted'].includes(v.status)&&commIn(v,'created_at'));
+  const lab=COMM.labour.map(withJob).filter(l=>commIn(l,'work_date'));
+  const labJobs={}; lab.forEach(l=>{ const c=(jobById[l.job_id]||{}).currency||'GBP'; labJobs[c]=(labJobs[c]||0)+Number(l.cost_amount); });
+  const labText=Object.keys(labJobs).map(c=>jobMoney(labJobs[c],c).replace(/\.00$/,'')).join(' · ')||'—';
+  const k=(icon,l,v,sub)=>`<div class="card kpi"><div class="spark">${icon}</div><div class="lbl">${l}</div><div class="val" style="font-size:${String(v).length>12?'17px':'26px'}">${v}</div>${sub?`<div class="muted" style="font-size:11.5px;margin-top:4px">${sub}</div>`:''}</div>`;
+  const opt=(v,l,cur)=>`<option value="${esc(v)}" ${v===cur?'selected':''}>${esc(l)}</option>`;
+  const clientIds=[...new Set(COMM.jobs.map(j=>j.client_id).concat(COMM.q.map(x=>x.client_id)))];
+  const jobRow=p=>`<tr><td style="white-space:nowrap"><a href="#" onclick="event.preventDefault();JOBREG=null;go('jobreg');setTimeout(()=>openJobForm('${p.job_id}'),1500)"><b>${esc(p.job_ref)}</b></a></td><td>${esc(p.title)}<div class="muted" style="font-size:11.5px">${esc(jobClientName(p.client_id))}</div></td><td>${ragChip(p.rag)}</td><td style="text-align:right">${jobMoney(p.revised_value,p.currency)}</td><td style="text-align:right">${pct(p.expected_margin)}</td><td style="text-align:right;${p.rag==='red'?'color:var(--red)':''}">${pct(p.forecast_margin)}</td><td style="text-align:right">${jobMoney(p.forecast_gp,p.currency)}</td></tr>`;
+  const jobTable=(rows,empty)=>rows.length?`<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Job</th><th></th><th>Status</th><th style="text-align:right">Revised value</th><th style="text-align:right">Expected margin</th><th style="text-align:right">Forecast margin</th><th style="text-align:right">Forecast GP</th></tr></thead><tbody>${rows.map(jobRow).join('')}</tbody></table></div>`:`<div class="muted" style="padding:12px">${empty}</div>`;
+  const sec=(t,body)=>`<div class="card" style="padding:12px 14px;margin-bottom:14px"><div style="font-weight:700;margin-bottom:8px">${t}</div>${body}</div>`;
+  const qStatusCount=s=>quotes.filter(x=>x.status===s&&!x.job_id).length;
+  return `<div class="sechead"><h3>📊 Commercial dashboard</h3><span class="sub">Quotes, jobs, costs and profit across the business</span><span class="line"></span><button class="btn-ghost" onclick="COMM=null;go('commercial')">Refresh</button></div>
+    <div class="card fld" style="padding:12px 14px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+      <select style="width:auto" onchange="commSet('entity',this.value)">${opt('all','All companies',COMM_F.entity)}${JOBREG_ENTITIES.map(e=>opt(e.code,e.code+' — '+e.legal_name,COMM_F.entity)).join('')}</select>
+      <select style="width:auto" onchange="commSet('client',this.value)">${opt('all','All clients',COMM_F.client)}${clientIds.filter(Boolean).map(id=>opt(id,jobClientName(id),COMM_F.client)).join('')}</select>
+      <label style="font-size:13px">From <input type="date" style="width:auto" value="${esc(COMM_F.from)}" onchange="commSet('from',this.value)"></label>
+      <label style="font-size:13px">To <input type="date" style="width:auto" value="${esc(COMM_F.to)}" onchange="commSet('to',this.value)"></label>
+      <span class="muted" style="font-size:12px">Dates filter by when the quote, job or PO was created.</span></div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${k('📝','Live quotes',live.length,sumByCur(live,'total_sell'))}
+      ${k('✅','Accepted · awaiting job',awaiting.length,sumByCur(awaiting,'total_sell'))}
+      ${k('📋','Active jobs',active.length,sumByCur(active,'revised_value'))}
+      ${k('💷','Forecast gross profit',sumByCur(active,'forecast_gp'),'on active jobs')}
+    </div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${k('🔴','Red jobs',red.length,'below expected margin')}
+      ${k('🟠','Orange jobs',orange.length,'95%+ of budget used')}
+      ${k('🧾','Open POs · still to invoice',openPOs.length,sumByCur(openPOs,p=>Math.max(Number(p.total)-Number(p.invoiced),0)))}
+      ${k('👷','Labour cost this month',labText,'employed engineers, confirmed')}
+    </div>
+    ${sec('Jobs needing attention (red and orange)', jobTable(red.concat(orange),'None — every active job is green.'))}
+    ${sec('Jobs over their approved budget', jobTable(over,'None.'))}
+    ${sec('Completed — awaiting invoicing', jobTable(toInvoice,'None.'))}
+    ${sec('Quotes', `<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13.5px">${Q_STATUSES.map(s=>`<div>${esc(s[1])}: <b>${qStatusCount(s[0])}</b></div>`).join('')}<div>Converted to jobs: <b>${quotes.filter(x=>x.job_id).length}</b></div></div>`)}
+    ${sec('Variations not yet approved', pendVars.length?`<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Number</th><th>Variation</th><th>Status</th><th style="text-align:right">Selling value</th></tr></thead><tbody>${pendVars.map(v=>`<tr><td><b>${esc(v.var_ref)}</b></td><td>${esc(v.title)}</td><td>${varChip(v)}</td><td style="text-align:right">${jobMoney(v.sell_total,(jobById[v.job_id]||{}).currency)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted" style="padding:12px">None.</div>')}
+    ${sec('All active jobs', jobTable(active,'No active jobs.'))}`;
 }
 </script>
 </body>
