@@ -769,7 +769,6 @@ function renderShell(){
       ${nb('shifts','🗓','Shift Reports')}
       ${nb('installs','🔩','Install Reports')}
       ${nb('gallery','🖼','Photo Evidence')}
-      ${nb('project','📐','Project Plan')}
       ${nb('documents','📁','Documents')}
       ${nb('notify','✉','Email Updates')}`:''}` : '';
   const supName = SUPPLIER ? SUPPLIER.name : 'Supplier portal';
@@ -796,7 +795,6 @@ function renderShell(){
       ${nb('checkins','📍','Site Check-ins')}
       ${nl('Documents')}
       ${nb('documents','📁','Documents')}
-      ${nb('project','📐','Project Plan')}
       ${nb('completed','🗄','Completed Works')}
       ${nl('Requests')}
       ${nb('quotes','📝','Quote Request')}` : '';
@@ -1956,7 +1954,7 @@ async function submitInstall(reportId){
   stopInstallAutosave();
   if(CAPTURE.draftId){ try{ await sb.from('report_drafts').delete().eq('id',CAPTURE.draftId); }catch(e){} CAPTURE.draftId=null; }
   msg('✓ Saved — the client portal now shows this update.','ok');
-  if(!reportId) await notifyClient(CLIENT.id,'report','New install report added','installs','A new install progress report is on your dashboard.');
+  if(!reportId){ const lab=rptJobLabel(); await notifyClient(CLIENT.id,'report','New install report added'+(lab?' — '+lab:''),'installs','A new install progress report is on your dashboard'+(lab?' for '+lab:'')+'.'); }
   await loadClientData(); setTimeout(()=>{ closeForm(); go('installs'); }, 700);
 }
 async function deleteInstall(reportId){
@@ -2409,7 +2407,7 @@ async function submitForm(type, editId){
     ? '✓ Report saved, but the customer signature could not be attached — open the report and re-sign.'
     : ('✓ Report saved'+(sigUrl?' — signature attached':'')+(pdfUrl?' — PDF generated':'')+'.'),
     sigWarn?'err':'ok');
-  await notifyClient(CLIENT.id, 'report', (type==='callout'?'New call-out report':'New shift report')+' added', type==='callout'?'callouts':'shifts', 'A new report has been added to your dashboard.');
+  { const lab=rptJobLabel(); await notifyClient(CLIENT.id, 'report', (type==='callout'?'New call-out report':'New shift report')+' added'+(lab?' — '+lab:''), type==='callout'?'callouts':'shifts', 'A new report has been added to your dashboard'+(lab?' for '+lab:'')+'.'); }
   await loadClientData();
   setTimeout(()=>{ closeForm(); go(type==='callout'?'callouts':'shifts'); }, 900);
 }
@@ -5026,13 +5024,13 @@ function go(page){
     else if(page==='callouts')html=pageCallouts();
     else if(page==='shifts')html=pageShifts();
     else if(page==='reports')html=(PROFILE.role==='engineer'?pageReports():pageActivity());
-    else if(page==='gallery')html=pageGallery();
+    else if(page==='gallery')html=(PROFILE.role==='engineer'?pageGallery():pagePhotos());
     else if(page==='requests')html=pageRequests();
     else if(page==='quotes')html=pageQuotes();
     else if(page==='qrequests')html=pageQuoteRequests();
     else if(page==='suppinv')html=pageSupplierInvoices();
     else if(page==='analytics')html=pageAnalytics();
-    else if(page==='documents')html=pageDocuments();
+    else if(page==='documents'||(page==='project'&&PROFILE.role!=='engineer'))html=(PROFILE.role==='engineer'?pageDocuments():pageDocs());
     else if(page==='notify')html=pageNotify();
     else if(page==='project')html=pageProjectPlan();
     else if(page==='pipeline'||page==='crm')html=pagePipeline();
@@ -9384,6 +9382,282 @@ function pageRotaTeam(){
       <tbody>${people.map(p=>`<tr><td><b>${esc(p.name)}</b><div class="muted" style="font-size:11px">${esc(p.trade||'Mercury team')}</div></td>${ds.map(d=>`<td style="text-align:center;${d===today?'background:rgba(56,189,248,.06)':''}">${cell(p,d)}</td>`).join('')}</tr>`).join('')
         || `<tr><td colspan="8" class="muted" style="padding:14px">Nobody is planned onto ${esc(CLIENT.name)}’s jobs this week.</td></tr>`}</tbody></table></div>
     <div class="note" style="margin-top:8px">People are planned into jobs on each job’s Team tab; this rota shows only people on ${esc(CLIENT.name)}’s jobs.</div>`;
+}
+
+/* the job and site a report was filed against, for the client's email/notification */
+function rptJobLabel(){
+  const v=el('f_job')?val('f_job'):''; const j=(RPT.jobs||[]).find(x=>x.id===v);
+  const site=j?j.site_name:(val('f_sitename')||((DATA.sites||[]).find(x=>x.id===(val('ir_site')||val('f_site')))||{}).name||'');
+  return [j?j.job_ref:'', site].filter(Boolean).join(' · ');
+}
+/* ===================================================================
+   SECURITY & SHARING  —  release 16 (build release 8).
+   Private photo/document storage (links that expire), Hide from client
+   on photos, Photo Evidence by job → date with zip download, one
+   Documents store with Share with client (bulk tick), and the Email
+   Updates sent log (office only).
+   =================================================================== */
+
+/* ---------- private "evidence" storage: swap stored public links for expiring ones ---------- */
+const EV_RE=/\/storage\/v1\/object\/public\/evidence\/([^?#"']+)/;
+let EVSIGN={};
+function evPath(u){ const m=String(u||'').match(EV_RE); if(!m) return null; try{ return decodeURIComponent(m[1]); }catch(e){ return m[1]; } }
+async function evSign(paths){
+  const now=Date.now(), need=[...new Set(paths)].filter(p=>!EVSIGN[p]||EVSIGN[p].exp<now);
+  for(let i=0;i<need.length;i+=100){
+    const chunk=need.slice(i,i+100);
+    try{ const r=await sb.storage.from('evidence').createSignedUrls(chunk,3600);
+      (r.data||[]).forEach((x,k)=>{ const p=x.path||chunk[k]; if(x.signedUrl) EVSIGN[p]={url:x.signedUrl, exp:now+50*60000}; }); }catch(e){ console.warn('sign',e); }
+  }
+}
+async function evUrl(u){ const p=evPath(u); if(!p) return u; await evSign([p]); return EVSIGN[p]?EVSIGN[p].url:u; }
+let EV_BUSY=false, EV_AGAIN=false;
+async function evScan(){
+  if(EV_BUSY){ EV_AGAIN=true; return; } EV_BUSY=true;
+  try{
+    const nodes=[...document.querySelectorAll('img[src*="/object/public/evidence/"],video[src*="/object/public/evidence/"],source[src*="/object/public/evidence/"],a[href*="/object/public/evidence/"]')];
+    if(nodes.length){
+      const attr=n=>n.tagName==='A'?'href':'src';
+      await evSign(nodes.map(n=>evPath(n.getAttribute(attr(n)))).filter(Boolean));
+      nodes.forEach(n=>{ const a=attr(n), p=evPath(n.getAttribute(a)); if(p && EVSIGN[p]) n.setAttribute(a, EVSIGN[p].url); });
+    }
+  }finally{ EV_BUSY=false; if(EV_AGAIN){ EV_AGAIN=false; setTimeout(evScan,30); } }
+}
+(function(){
+  let t=null;
+  const start=()=>{ if(!document.body) return setTimeout(start,50); new MutationObserver(()=>{ clearTimeout(t); t=setTimeout(evScan,40); }).observe(document.body,{childList:true,subtree:true}); };
+  start();
+  const _open=window.open.bind(window);
+  window.open=function(u,...rest){ if(!evPath(u)) return _open(u,...rest); const w=_open('about:blank',...rest); evUrl(u).then(s=>{ if(w) w.location.href=s; else _open(s,...rest); }); return w; };
+})();
+// PDFs and zips fetch files: sign first
+if(typeof urlToDataUrl==='function'){ const _u2d=urlToDataUrl; urlToDataUrl=async function(u){ return _u2d(await evUrl(u)); }; }
+
+/* ---------- photos hidden from the client ---------- */
+let HIDDEN=new Set();
+if(typeof loadClientData==='function'){
+  const _lcd=loadClientData;
+  loadClientData=async function(){ const r=await _lcd.apply(this,arguments);
+    try{ if(CLIENT){ const h=await sb.rpc('hidden_photo_urls',{p_client:CLIENT.id}); HIDDEN=new Set(h.data||[]); } }catch(e){}
+    PHOTOS=null; return r; };
+}
+if(typeof reqPhotoStrip==='function'){ const _rps=reqPhotoStrip; reqPhotoStrip=function(urls){ return _rps(VIEW==='client'?(urls||[]).filter(u=>!HIDDEN.has(u)):urls); }; }
+
+/* ---------- Photo Evidence: job → date, hide, zip ---------- */
+let PHOTOS=null, PH_F={job:'all'};
+async function phLoad(){
+  const cid=CLIENT.id;
+  try{ const rows=await jobFetchAll(()=>sb.from('media').select('*').eq('client_id',cid).order('created_at',{ascending:false}));
+    if(!CLIENT||CLIENT.id!==cid) return; PHOTOS={client:cid, list:rows}; }
+  catch(e){ PHOTOS={client:cid, list:[], err:e.message}; }
+  if(CURRENT==='gallery') go('gallery');
+}
+function phJobOf(m){
+  const pools={callout:DATA.callouts, shift:DATA.shifts, install:DATA.progress, daily:DATA.daily};
+  const r=(pools[m.report_type]||[]).find(x=>x.id===m.report_id);
+  return r?(r.job_id||null):null;
+}
+function pagePhotos(){
+  if(!CLIENT) return emptyState('👈','Choose a client','');
+  if(!PHOTOS || PHOTOS.client!==CLIENT.id){ phLoad(); return emptyState('⏳','Loading photos…','One moment.'); }
+  const office=VIEW!=='client' && PROFILE.role==='admin', jobs=cjobs();
+  const list=PHOTOS.list.filter(m=>m.file_url);
+  if(!list.length) return sectionH('Photo &amp; Video Evidence')+emptyState('🖼','Nothing yet','Photos and videos attached to reports filed from site appear here, in a folder for each job.');
+  const jref=id=>{ const j=jobs.find(x=>x.id===id); return j?`${j.job_ref} · ${j.title||''}`:'Job'; };
+  const folders={};
+  list.forEach(m=>{ const j=phJobOf(m); const k=j||'__none'; if(PH_F.job!=='all' && PH_F.job!==k) return; (folders[k]=folders[k]||[]).push(m); });
+  const keys=Object.keys(folders).sort((a,b)=>a==='__none'?1:b==='__none'?-1:jref(b).localeCompare(jref(a)));
+  const hidden=list.filter(m=>m.hidden_from_client).length;
+  const body=keys.map((k,i)=>{
+    const byDate={}; folders[k].forEach(m=>{ const d=String(m.created_at||'').slice(0,10); (byDate[d]=byDate[d]||[]).push(m); });
+    const dates=Object.keys(byDate).sort().reverse();
+    return `<details class="mfolder" ${i===0?'open':''}><summary><span class="mf-name">📁 ${esc(k==='__none'?'Not linked to a job':jref(k))}</span><span class="mf-count">${folders[k].length} item${folders[k].length===1?'':'s'}</span>
+        <button class="edit-btn" style="margin-left:8px" onclick="event.preventDefault();phZip('${k}')">⬇ Zip</button></summary>
+      ${dates.map(d=>`<div style="font-weight:700;font-size:12.5px;margin:10px 4px 6px">${esc(jobDate(d))} <span class="muted" style="font-weight:500">· ${byDate[d].length}</span></div>
+        <div class="gallery">${byDate[d].map(m=>phTile(m,office)).join('')}</div>`).join('')}</details>`;
+  }).join('');
+  const opt=(v,l)=>`<option value="${esc(v)}" ${PH_F.job===v?'selected':''}>${esc(l)}</option>`;
+  return sectionH('Photo &amp; Video Evidence',`${list.length} item${list.length===1?'':'s'}${office&&hidden?` · ${hidden} hidden from the client`:''}`)+
+    `<div class="card fld" style="padding:10px 12px;margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><select style="width:auto" onchange="PH_F.job=this.value;go('gallery')">${opt('all','All jobs')}${jobs.map(j=>opt(j.id,j.job_ref+' · '+(j.title||''))).join('')}${opt('__none','Not linked to a job')}</select>
+      ${office?'<span class="muted" style="font-size:12.5px">Every photo is shown to the client unless you hide it.</span>':''}</div><div class="card">${body}</div>`;
+}
+function phTile(m, office){
+  const vid=isVideoMedia(m);
+  const media=vid?`<video src="${esc(m.file_url)}" controls preload="metadata" playsinline></video>`:`<a href="${esc(m.file_url)}" target="_blank"><img src="${esc(m.file_url)}" loading="lazy"></a>`;
+  return `<div class="mtile" style="${m.hidden_from_client?'opacity:.5':''}">${media}<div class="cap">${esc(String(m.report_type||'media'))} · ${esc(String(m.created_at||'').slice(11,16))}
+    ${office?`<label style="display:flex;gap:5px;align-items:center;margin-top:4px;font-size:11px;cursor:pointer"><input type="checkbox" style="width:auto" ${m.hidden_from_client?'checked':''} onchange="phHide('${m.id}',this.checked,this)"> Hide from client</label>`:''}</div></div>`;
+}
+async function phHide(id,on,box){
+  const r=await sb.from('media').update({hidden_from_client:on}).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length){ alert('Not saved: '+(r.error?r.error.message:'no permission')); box.checked=!on; return; }
+  const m=PHOTOS.list.find(x=>x.id===id); if(m) Object.assign(m,r.data[0]);
+  if(on) HIDDEN.add(m.file_url); else HIDDEN.delete(m.file_url);
+  box.closest('.mtile').style.opacity=on?.5:1;
+}
+/* a minimal zip writer (files stored, not compressed: photos are already compressed) */
+function zipCrc(buf){ let c, crc=0xFFFFFFFF; if(!zipCrc.t){ zipCrc.t=new Uint32Array(256); for(let n=0;n<256;n++){ c=n; for(let k=0;k<8;k++) c=c&1?0xEDB88320^(c>>>1):c>>>1; zipCrc.t[n]=c>>>0; } }
+  for(let i=0;i<buf.length;i++) crc=zipCrc.t[(crc^buf[i])&0xFF]^(crc>>>8); return (crc^0xFFFFFFFF)>>>0; }
+function zipBuild(files){
+  const enc=new TextEncoder(), parts=[], central=[]; let off=0;
+  const u16=n=>[n&255,(n>>8)&255], u32=n=>[n&255,(n>>8)&255,(n>>16)&255,(n>>>24)&255];
+  files.forEach(f=>{ const name=enc.encode(f.name), crc=zipCrc(f.data), sz=f.data.length;
+    const head=new Uint8Array([...u32(0x04034b50),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(sz),...u32(sz),...u16(name.length),...u16(0)]);
+    parts.push(head,name,f.data);
+    central.push(new Uint8Array([...u32(0x02014b50),...u16(20),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(sz),...u32(sz),...u16(name.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(off)]),name);
+    off+=head.length+name.length+sz; });
+  const csz=central.reduce((a,b)=>a+b.length,0);
+  const end=new Uint8Array([...u32(0x06054b50),...u16(0),...u16(0),...u16(files.length),...u16(files.length),...u32(csz),...u32(off),...u16(0)]);
+  return new Blob([...parts,...central,end],{type:'application/zip'});
+}
+async function phZip(k){
+  const items=PHOTOS.list.filter(m=>m.file_url && (phJobOf(m)||'__none')===k);
+  if(!items.length) return;
+  const jobs=cjobs(), j=jobs.find(x=>x.id===k), folder=(j?j.job_ref:'not-linked').replace(/[^A-Za-z0-9_-]+/g,'_');
+  const files=[]; let n=0;
+  for(const m of items){ try{ const u=await evUrl(m.file_url); const r=await fetch(u); if(!r.ok) continue; const b=new Uint8Array(await r.arrayBuffer());
+      const ext=(String(m.file_url).split('?')[0].split('.').pop()||'jpg').slice(0,5);
+      files.push({name:`${folder}/${String(m.created_at||'').slice(0,10)}/${String(++n).padStart(3,'0')}_${m.report_type||'photo'}.${ext}`, data:b}); }catch(e){} }
+  if(!files.length) return alert('Could not fetch the photos.');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(zipBuild(files)); a.download=`${folder}-photos.zip`; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
+}
+/* each job's photos also appear on the job (Reports tab) */
+if(typeof jobLoadReports==='function'){
+  const _jlr=jobLoadReports;
+  jobLoadReports=async function(j){ await _jlr(j); const box=el('jobReports'); if(!box) return;
+    const ids=[]; for(const t of ['callout_reports','shift_reports','progress_reports']){ const r=await sb.from(t).select('id').eq('job_id',j.id); (r.data||[]).forEach(x=>ids.push(x.id)); }
+    if(!ids.length) return;
+    const m=await sb.from('media').select('*').in('report_id',ids).order('created_at',{ascending:false});
+    const list=(m.data||[]).filter(x=>x.file_url); if(!list.length) return;
+    box.insertAdjacentHTML('beforeend',`<div style="font-weight:700;margin:14px 0 6px">Photos <span class="muted" style="font-weight:500;font-size:12.5px">· ${list.length} from this job’s reports${list.some(x=>x.hidden_from_client)?' · '+list.filter(x=>x.hidden_from_client).length+' hidden from the client':''}</span></div>
+      <div class="gallery">${list.slice(0,24).map(x=>phTile(x,false)).join('')}</div>`); };
+}
+
+/* ---------- Documents: one store, Share with client ---------- */
+const DOC_TYPES2=['RAMS','Method Statement','Drawing','Specification','Permit','Certificate','Insurance','Avetta','Handover Pack','O&M / Handover','Programme','Meeting Minutes','Kick-off Pack','Toolbox Talk','Survey / Report','Supplier quote','Client PO / confirmation','Other'];
+const ATT_LABEL={rams:'RAMS', method_statement:'Method Statement', drawing:'Drawing', specification:'Specification', permit:'Permit', certificate:'Certificate', handover:'Handover Pack', client_po:'Client PO / confirmation', client_confirmation:'Client PO / confirmation', correspondence:'Correspondence', photo:'Photo', delivery_note:'Delivery note', supplier_quote:'Supplier quote', supplier_invoice:'Supplier invoice', other:'Other'};
+let DOCS2={client:null, att:null}, DOC_F={job:'all', share:'all', q:''};
+async function docsLoadAtt(){
+  const cid=CLIENT.id, office=VIEW!=='client' && PROFILE.role==='admin';
+  let att=[];
+  try{
+    if(office){ await clPerms(); const ids=(CJOBS.list||[]).map(j=>j.id);
+      if(ids.length && jobCan('jobs.view')){ const r=await sb.from('commercial_attachments').select('*').in('job_id',ids).is('archived_at',null).order('created_at'); att=(r.data||[]).filter(a=>!['supplier_invoice'].includes(a.doc_type)); } }
+    else { const r=await sb.rpc('client_job_documents',{p_client:cid}); att=r.data||[]; }
+  }catch(e){ console.warn(e); }
+  if(!CLIENT||CLIENT.id!==cid) return; DOCS2={client:cid, att};
+  if(['documents','project'].includes(CURRENT)) go(CURRENT);
+}
+function pageDocs(){
+  if(!CLIENT) return emptyState('👈','Choose a client','');
+  const jobs=cjobs(); if(!CJOBS.list) return emptyState('⏳','Loading documents…','One moment.');
+  if(DOCS2.client!==CLIENT.id){ DOCS2={client:CLIENT.id, att:null}; docsLoadAtt(); return emptyState('⏳','Loading documents…','One moment.'); }
+  if(DOCS2.att===null) return emptyState('⏳','Loading documents…','One moment.');
+  const office=VIEW!=='client' && PROFILE.role==='admin';
+  const jref=id=>{ const j=jobs.find(x=>x.id===id); return j?`${j.job_ref} · ${j.title||''}`:'Job'; };
+  const rows=[
+    ...(DATA.documents||[]).map(d=>({src:'doc', id:d.id, job:d.job_id||null, cat:d.doc_type||'Other', title:d.title, file:d.file_name, url:d.file_url, shared:!!d.shared_with_client, expiry:d.expiry_date, site:d.site_id, when:d.created_at, by:d.uploaded_by, project:(d.doc_class||'library')==='project'})),
+    ...(DOCS2.att||[]).map(a=>({src:'att', id:a.id, job:a.job_id, cat:ATT_LABEL[a.doc_type]||a.doc_type, title:a.title, file:a.file_name, path:a.storage_path, url:a.file_url, shared:office?!!a.share_with_client:true, when:a.created_at, internal:a.doc_type==='supplier_quote'}))];
+  const q=DOC_F.q.trim().toLowerCase();
+  const shown=rows.filter(r=>(DOC_F.job==='all'||(r.job||'__none')===DOC_F.job) && (DOC_F.share==='all'||(DOC_F.share==='no'?!r.shared:r.shared)) && (!q||[r.title,r.file,r.cat].some(v=>String(v||'').toLowerCase().includes(q))));
+  const unshared=rows.filter(r=>!r.shared && !r.internal).length;
+  const groups={}; shown.forEach(r=>{ const k=r.job||'__none'; (groups[k]=groups[k]||{}); (groups[k][r.cat]=groups[k][r.cat]||[]).push(r); });
+  const keys=Object.keys(groups).sort((a,b)=>a==='__none'?1:b==='__none'?-1:jref(b).localeCompare(jref(a)));
+  const opt=(v,l,c)=>`<option value="${esc(v)}" ${v===c?'selected':''}>${esc(l)}</option>`;
+  const row=r=>{ const e=r.expiry?docExpiry({expiry_date:r.expiry}):null; const s=r.site?(DATA.sites||[]).find(x=>x.id===r.site):null;
+    return `<tr><td><b>${esc(r.title||'Document')}</b>${r.file?`<div class="muted" style="font-size:11px">${esc(r.file)}</div>`:''}${r.src==='att'?'<div class="muted" style="font-size:11px">Job attachment</div>':''}</td>
+      <td>${s?esc(s.name||s.code||s.city):''}</td><td>${e?`<span class="chip ${e.cls}">${e.label}</span>`:''}</td>
+      <td><button class="edit-btn" onclick="docOpen('${r.src}','${r.id}')">Open ↗</button></td>
+      ${office?`<td>${r.internal?'<span class="muted" style="font-size:11.5px">Internal only</span>':`<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;white-space:nowrap"><input type="checkbox" class="doc-share" data-src="${r.src}" data-id="${r.id}" style="width:auto" ${r.shared?'checked':''} onchange="docShare('${r.src}','${r.id}',this.checked,this)"> ${r.shared?'Shared':'Not shared'}</label>`}</td>`:''}</tr>`; };
+  const body=keys.map(k=>`<div class="card" style="margin-bottom:12px"><h4 style="margin:0 0 8px">📁 ${esc(k==='__none'?'General (not linked to a job)':jref(k))}</h4>
+    ${Object.keys(groups[k]).sort().map(c=>`<div style="font-weight:700;font-size:12.5px;margin:8px 0 4px">${esc(c)}</div><table class="tbl"><tbody>${groups[k][c].map(row).join('')}</tbody></table>`).join('')}</div>`).join('')
+    || emptyState('📁','No documents match','');
+  return `<div class="sechead"><h3>📁 Documents</h3><span class="sub">${office?`${rows.length} on file · ${unshared} not shared with the client`:'Documents shared with you, by job'}</span><span class="line"></span>${canAddDocs()?`<button class="addbtn" onclick="docAddForm()">＋ Add document</button>`:''}</div>
+    <div class="card fld" style="padding:10px 12px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <input placeholder="Search title, file, type…" value="${esc(DOC_F.q)}" onchange="DOC_F.q=this.value;go(CURRENT)" style="flex:1;min-width:180px;width:auto">
+      <select style="width:auto" onchange="DOC_F.job=this.value;go(CURRENT)">${opt('all','All jobs',DOC_F.job)}${jobs.map(j=>opt(j.id,j.job_ref+' · '+(j.title||''),DOC_F.job)).join('')}${opt('__none','General',DOC_F.job)}</select>
+      ${office?`<select style="width:auto" onchange="DOC_F.share=this.value;go(CURRENT)">${opt('all','Shared and not shared',DOC_F.share)}${opt('no',`Not shared (${unshared})`,DOC_F.share)}${opt('yes','Shared',DOC_F.share)}</select>
+        <button class="btn-ghost" onclick="docShareAll()">Share all shown with the client</button>`:''}</div>
+    ${office?`<div class="note" style="margin-bottom:10px">New documents are <b>not</b> shared until you tick them. Documents that were on file before this change start unshared — use the filter and <b>Share all shown</b> to re-share them quickly.</div>`:''}
+    ${body}`;
+}
+async function docOpen(src,id){
+  if(src==='doc'){ const d=(DATA.documents||[]).find(x=>x.id===id); if(d&&d.file_url) window.open(d.file_url,'_blank'); return; }
+  const a=(DOCS2.att||[]).find(x=>x.id===id); if(!a) return;
+  if(a.file_url&&!a.storage_path){ window.open(a.file_url,'_blank'); return; }
+  const w=window.open('about:blank','_blank'); const r=await sb.storage.from('commercial').createSignedUrl(a.storage_path,300);
+  if(r.error||!r.data){ if(w) w.close(); return alert('Could not open: '+(r.error?r.error.message:'')); }
+  if(w) w.location.href=r.data.signedUrl;
+}
+async function docShare(src,id,on,box,quiet){
+  const r=src==='doc'?await sb.from('documents').update({shared_with_client:on}).eq('id',id).select():await sb.from('commercial_attachments').update({share_with_client:on}).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length){ if(!quiet) alert('Not saved: '+(r.error?r.error.message:'no permission')); if(box) box.checked=!on; return false; }
+  if(src==='doc'){ const d=(DATA.documents||[]).find(x=>x.id===id); if(d) Object.assign(d,r.data[0]); } else { const a=(DOCS2.att||[]).find(x=>x.id===id); if(a) Object.assign(a,r.data[0]); }
+  if(on && !quiet){ try{ await notifyClient(CLIENT.id,'document','Document shared: '+(r.data[0].title||'document'),'documents','A document has been shared with you.'); }catch(e){} }
+  if(box && !quiet) go(CURRENT);
+  return true;
+}
+async function docShareAll(){
+  const boxes=[...document.querySelectorAll('.doc-share')].filter(b=>!b.checked);
+  if(!boxes.length) return alert('Everything shown is already shared.');
+  if(!confirm(`Share ${boxes.length} document${boxes.length===1?'':'s'} with ${CLIENT.name}? They will appear in the client’s Documents.`)) return;
+  let n=0; for(const b of boxes){ if(await docShare(b.dataset.src,b.dataset.id,true,null,true)) n++; }
+  if(n){ try{ await notifyClient(CLIENT.id,'document',`${n} document${n===1?'':'s'} shared`,'documents','New documents have been shared with you.'); }catch(e){} }
+  go(CURRENT);
+}
+function docAddForm(){
+  const jobs=cjobs(), office=PROFILE.role==='admin' && VIEW!=='client';
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal"><div class="modal-h"><h3>Add document</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div class="fld"><label>Title <span class="req">*</span></label><input id="d_title" placeholder="e.g. RAMS — conveyor install"></div>
+      <div class="frow"><div class="fld"><label>Type</label><select id="d_type">${DOC_TYPES2.map(t=>`<option>${esc(t)}</option>`).join('')}</select></div>
+        <div class="fld"><label>Job</label><select id="d_job"><option value="">— general / not a job —</option>${jobs.map(j=>`<option value="${j.id}">${esc(j.job_ref+' · '+(j.title||''))}</option>`).join('')}</select></div></div>
+      <div class="frow"><div class="fld"><label>Site (optional)</label><select id="d_site">${siteOptions()}</select></div>
+        <div class="fld"><label>Expiry date (optional)</label><input id="d_expiry" type="date"></div></div>
+      <div class="fld"><label>File <span class="req">*</span></label><input id="d_file" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.xlsx,.csv,.dwg"></div>
+      ${office?`<label style="display:flex;gap:7px;align-items:center;font-size:13px"><input type="checkbox" id="d_share" style="width:auto"> Share with ${esc(CLIENT.name)}</label>`:''}
+    </div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="docSave" onclick="docAddSave()">Upload document</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function docAddSave(){
+  const title=val('d_title'), f=el('d_file').files[0];
+  if(!title) return msg('Please add a title.','err'); if(!f) return msg('Please choose a file.','err');
+  el('docSave').disabled=true; msg('Uploading…');
+  const path=`${CLIENT.slug}/documents/${Date.now()}_${f.name.replace(/[^A-Za-z0-9._-]/g,'_')}`;
+  const u=await sb.storage.from('evidence').upload(path,f,{upsert:false});
+  if(u.error){ el('docSave').disabled=false; return msg('Upload failed: '+u.error.message,'err'); }
+  const url=sb.storage.from('evidence').getPublicUrl(path).data.publicUrl;   // stored as a reference; opened with an expiring link
+  const share=el('d_share')?el('d_share').checked:true;
+  const row={client_id:CLIENT.id, site_id:val('d_site')||null, job_id:val('d_job')||null, title, doc_type:val('d_type'), doc_class:'library', file_url:url, file_name:f.name, expiry_date:val('d_expiry')||null, uploaded_by:(PROFILE.full_name||PROFILE.email), shared_with_client:share};
+  const r=await sb.from('documents').insert(row);
+  if(r.error){ el('docSave').disabled=false; return msg('Could not save: '+r.error.message,'err'); }
+  if(share && PROFILE.role==='admin'){ try{ await notifyClient(CLIENT.id,'document','New document: '+title,'documents','A new document has been shared with you.'); }catch(e){} }
+  closeForm(); await loadClientData(); go('documents');
+}
+
+/* ---------- Email Updates: office only, with the sent log ---------- */
+if(typeof pageNotify==='function'){
+  const _pn=pageNotify;
+  pageNotify=function(){
+    if(VIEW==='client' || PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','Email updates are managed by Mercury.');
+    setTimeout(ntfLoadLog,30);
+    return _pn()+`<div class="card" style="margin-top:16px" id="ntfLog"><h4 style="margin:0 0 6px">📬 Sent log</h4><div class="muted">Loading…</div></div>`;
+  };
+}
+async function ntfLoadLog(){
+  const box=el('ntfLog'); if(!box||!CLIENT) return;
+  const r=await sb.from('email_sent_log').select('*').eq('client_id',CLIENT.id).order('created_at',{ascending:false}).limit(150);
+  if(r.error){ box.innerHTML=`<h4 style="margin:0 0 6px">📬 Sent log</h4><div class="muted">Could not load: ${esc(r.error.message)}</div>`; return; }
+  const rows=r.data||[], failed=rows.filter(x=>x.status==='failed').length;
+  const chip=s=>s==='sent'?'<span class="chip green">Sent</span>':s==='failed'?'<span class="chip red">Failed / bounced</span>':`<span class="chip grey">${esc(s==='pending'?'Waiting':s)}</span>`;
+  box.innerHTML=`<h4 style="margin:0 0 6px">📬 Sent log <span class="muted" style="font-weight:500;font-size:12.5px">· what was emailed to whom and when${failed?` · <span style="color:var(--red)">${failed} failed</span>`:''}</span></h4>
+    <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>When</th><th>To</th><th>Update</th><th>How</th><th>Status</th></tr></thead><tbody>
+    ${rows.map(x=>`<tr><td style="white-space:nowrap">${esc(jobDate(String(x.sent_at||x.created_at||'').slice(0,10)))} <span class="muted">${esc(String(x.sent_at||x.created_at||'').slice(11,16))}</span></td>
+      <td>${esc(x.recipient||'')}<div class="muted" style="font-size:11.5px">${esc(x.email||'')}</div></td><td>${esc(x.subject||x.update_kind||'')}</td>
+      <td>${esc(x.delivery==='instant'?'Straight away':'Daily summary')}</td><td>${chip(x.status)}${x.status==='failed'&&x.last_error?`<div class="muted" style="font-size:11px">${esc(String(x.last_error).slice(0,120))}</div>`:''}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted" style="padding:12px">Nothing emailed yet.</td></tr>'}</tbody></table></div>`;
 }
 </script>
 </body>
