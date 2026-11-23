@@ -391,6 +391,21 @@ tr[onclick]{cursor:pointer}
 .crmmeta>div>span{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:700}
 .crmnote{margin-top:12px;padding:10px 12px;border:1px dashed var(--line2);border-radius:9px;font-size:13px;color:var(--text);white-space:pre-wrap}
 @media(max-width:560px){.eg-head{grid-template-columns:1fr 1fr 30px}.eg-head .eg-p{grid-column:1 / 3}.cardrow{grid-template-columns:1fr 1fr 30px}.cardrow .cd-e{grid-column:1 / 3}}
+
+/* ===== Release 9 (23 Nov 2026): new menu — client picker in the sidebar, view badge, preview bar ===== */
+.navclient{margin:20px 4px 4px;padding:12px;border:1px solid var(--line2);border-radius:12px;background:var(--panel)}
+.navclient label{display:block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:700;margin-bottom:6px}
+.navclient select{width:100%;padding:9px 10px;border-radius:9px;background:var(--panel2);border:1px solid var(--line2);color:var(--text);font-family:inherit;font-size:13px;font-weight:700}
+.navclient-view{margin-top:8px;width:100%;border:1px dashed var(--line2);background:transparent;color:var(--muted);font-family:inherit;font-size:12.5px;font-weight:700;padding:7px 10px;border-radius:9px;cursor:pointer}
+.navclient-view:hover{color:var(--text);border-color:var(--cyan)}
+.viewbadge{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;padding:7px 13px;border-radius:999px;border:1px solid var(--line2);background:var(--panel);color:var(--muted);white-space:nowrap}
+.previewbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 28px;font-size:13px;font-weight:700;color:#04121f}
+.previewbar.client{background:linear-gradient(135deg,#38bdf8,#22c55e)}
+.previewbar.supplier{background:linear-gradient(135deg,#f59e0b,#fb7185)}
+.previewbar select{padding:5px 9px;border-radius:8px;border:1px solid rgba(4,18,31,.25);background:rgba(255,255,255,.85);color:#04121f;font-family:inherit;font-weight:700;font-size:13px}
+.previewbar .spacer{flex:1}
+.previewbar button{border:0;border-radius:999px;padding:6px 14px;background:#04121f;color:#fff;font-family:inherit;font-weight:700;font-size:12.5px;cursor:pointer}
+@media (max-width:760px){ .previewbar{padding:8px 14px} .viewbadge{order:11} }
 </style>
 </head>
 <body>
@@ -587,6 +602,10 @@ async function enterClientTo(id,page,focusId){
   CLIENT = CLIENTS.find(c=>c.id===id) || CLIENT;
   if(!CLIENT) return;
   await loadClientData();
+  // Office staff have no Overview page any more: open the client's Progress instead
+  const office = PROFILE.role==='admin' && VIEW!=='client' && !SUPPREVIEW;
+  if(office && (!page || page==='overview')) page='sites';
+  if(office) renderShell();
   const crumb=document.querySelector('.crumb'); if(crumb) crumb.textContent=CLIENT.name;
   const sel=el('cliSelect'); if(sel) sel.value=CLIENT.id;
   go(page||'overview');
@@ -699,33 +718,88 @@ function renderShell(){
   const isClient = VIEW==='client';
   const isAdmin = PROFILE.role==='admin';
   const att = (isAdmin && HQDATA) ? hqAttentionCount() : 0;
-  const adminNav = (isAdmin && !isClient && !SUPPREVIEW) ? `
-      <div class="navlabel">Admin</div>
-      <button class="nav-btn" data-page="hq"><span class="ic">🏠</span> HQ Overview ${att?`<span class="nav-badge">${att}</span>`:''}</button>
-      <button class="nav-btn" data-page="digest"><span class="ic">📨</span> Daily Digest</button>
-      <button class="nav-btn" data-page="clients"><span class="ic">🗂</span> Clients</button>
-      <button class="nav-btn" data-page="commercial"><span class="ic">📊</span> Commercial</button>
-      <button class="nav-btn" data-page="quotereg"><span class="ic">📝</span> Quotes</button>
-      <button class="nav-btn" data-page="jobreg"><span class="ic">📋</span> Jobs</button>
-      <button class="nav-btn" data-page="poreg"><span class="ic">🧾</span> Purchase orders</button>
-      <button class="nav-btn" data-page="labour"><span class="ic">👷</span> Labour &amp; rates</button>
-      <button class="nav-btn" data-page="xero"><span class="ic">🔄</span> Send to Xero</button>
-      <button class="nav-btn" data-page="jobs"><span class="ic">🚦</span> Job Status</button>
-      <button class="nav-btn" data-page="engineers"><span class="ic">👷</span> Engineers</button>
-      <button class="nav-btn" data-page="compliance"><span class="ic">🛡</span> Compliance</button>
-      <button class="nav-btn" data-page="suppliers"><span class="ic">🚚</span> Suppliers</button>
-      <button class="nav-btn" data-page="finance"><span class="ic">💷</span> Profit</button>
-      <button class="nav-btn" data-page="crm"><span class="ic">🤝</span> CRM</button>` : '';
   const isSupplier = PROFILE.role==='supplier' || !!SUPPREVIEW;
+  const isOffice = isAdmin && !isClient && !SUPPREVIEW;
+  const nb=(p,ic,l,extra)=>`<button class="nav-btn" data-page="${p}"><span class="ic">${ic}</span> ${l}${extra||''}</button>`;
+  const nl=t=>`<div class="navlabel">${t}</div>`;
+  /* Office (Mercury staff) menu — release 9 (23 Nov 2026).
+     Business-wide groups first; the client picker and that client's pages below. */
+  const adminNav = isOffice ? `
+      ${nl('🏠 Home')}
+      ${nb('hq','🏠','HQ Overview', att?`<span class="nav-badge">${att}</span>`:'')}
+      ${nb('digest','📨','Daily Digest')}
+      ${nb('command','🛰','Command Centre')}
+      ${nl('💼 Sales')}
+      ${nb('quotes','📥','Quote Requests')}
+      ${nb('requests','🛠','Work Requests')}
+      ${nb('crm','🤝','CRM')}
+      ${nb('quotereg','📝','Quotes')}
+      ${nb('clients','🗂','Clients')}
+      ${nl('📋 Jobs')}
+      ${nb('jobreg','📋','Jobs')}
+      ${nb('jobs','🚦','Job Status')}
+      ${nb('risks','⚠','Risk Register')}
+      ${nl('💷 Purchasing &amp; Finance')}
+      ${nb('poreg','🧾','Purchase Orders')}
+      ${nb('commercial','📊','Commercial')}
+      ${nb('xero','🔄','Send to Xero')}
+      ${nl('👷 People &amp; Suppliers')}
+      ${nb('engineers','👷','Engineers')}
+      ${nb('labour','⏱','Labour &amp; rates')}
+      ${nb('compliance','🛡','Compliance')}
+      ${nb('suppliers','🚚','Suppliers')}
+      ${nl('📈 Reports &amp; Insights')}
+      ${nb('reports','✓','Activity Feed')}
+      ${nb('analytics','📊','Analytics')}
+      <div class="navclient">
+        <label for="cliSelect">Client</label>
+        ${CLIENTS.length?`<select id="cliSelect">${CLIENTS.map(c=>`<option value="${c.id}" ${CLIENT&&c.id===CLIENT.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`:'<div class="muted" style="font-size:12px">No clients yet</div>'}
+        ${CLIENT?`<button class="navclient-view" onclick="setView('client')">👁 View as client</button>`:''}
+      </div>
+      ${CLIENT?`${nl('🏢 '+esc(CLIENT.name))}
+      ${nb('sites','▦','Progress')}
+      ${nb('schedule','▤','Schedule')}
+      ${nb('rota','📆','Shift Rota')}
+      ${nb('teams','⛺','Teams &amp; Routes')}
+      ${nb('callouts','🔧','Call-Out Reports')}
+      ${nb('shifts','🗓','Shift Reports')}
+      ${nb('installs','🔩','Install Reports')}
+      ${nb('gallery','🖼','Photo Evidence')}
+      ${nb('project','📐','Project Plan')}
+      ${nb('documents','📁','Documents')}
+      ${nb('notify','✉','Email Updates')}`:''}` : '';
+  const supName = SUPPLIER ? SUPPLIER.name : 'Supplier portal';
   const supplierNav = isSupplier ? `
-      <div class="navlabel">Supplier Portal</div>
+      ${nl('🚚 '+esc(supName))}
       <button class="nav-btn active" data-page="sup_home"><span class="ic">🏠</span> Dashboard</button>
-      <button class="nav-btn" data-page="sup_engineers"><span class="ic">👷</span> My Engineers</button>
-      <button class="nav-btn" data-page="sup_jobs"><span class="ic">🗓</span> My Assignments</button>
-      <button class="nav-btn" data-page="sup_timesheets"><span class="ic">⏱</span> Timesheets</button>
-      <button class="nav-btn" data-page="sup_feedback"><span class="ic">⭐</span> Performance</button>
-      <button class="nav-btn" data-page="sup_docs"><span class="ic">📁</span> Company Docs</button>` : '';
-  const opsNav = isClient ? '' : `
+      ${nb('sup_jobs','🗓','Bookings')}
+      ${nb('sup_timesheets','⏱','Timesheets')}
+      ${nb('sup_engineers','👷','Engineers')}
+      ${nb('sup_docs','📁','Compliance &amp; Documents')}` : '';
+  /* Client portal menu (also what Mercury staff see in "View as client") */
+  const clientNav = (isClient && !isSupplier) ? `
+      ${nl('Programme')}
+      <button class="nav-btn active" data-page="overview"><span class="ic">◫</span> Overview</button>
+      ${nb('sites','▦','Progress')}
+      ${nb('schedule','▤','Schedule')}
+      ${nb('teams','⛺','Teams &amp; Routes')}
+      ${nb('rota','📆','Shift Rota')}
+      ${nl('Reports')}
+      ${nb('callouts','🔧','Call-Out Reports')}
+      ${nb('shifts','🗓','Shift Reports')}
+      ${nb('installs','🔩','Install Reports')}
+      ${nb('reports','✓','Latest Updates')}
+      ${nb('gallery','🖼','Photo Evidence')}
+      ${nb('checkins','📍','Site Check-ins')}
+      ${nl('Documents')}
+      ${nb('documents','📁','Documents')}
+      ${nb('project','📐','Project Plan')}
+      ${nb('completed','🗄','Completed Works')}
+      ${nl('Requests')}
+      ${nb('requests','🛠','Request Work')}
+      ${nb('quotes','📝','Request a Quote')}` : '';
+  /* Engineers (and any other signed-in staff role) keep their existing menu for now */
+  const opsNav = `
       <div class="navlabel">Live</div>
       <button class="nav-btn" data-page="command"><span class="ic">🛰</span> Command Centre</button>
       <div class="navlabel">Operations</div>
@@ -735,20 +809,8 @@ function renderShell(){
       <button class="nav-btn" data-page="requests"><span class="ic">📋</span> Work Requests</button>
       <button class="nav-btn" data-page="quotes"><span class="ic">📝</span> Quote Requests</button>
       <button class="nav-btn" data-page="analytics"><span class="ic">📊</span> Analytics</button>`;
-  // Client-portal branding: show the client's logo/colour; "Delivered by Mercury"
-  const cinit=(CLIENT&&CLIENT.name?CLIENT.name.replace(/[^A-Za-z0-9]/g,'').charAt(0).toUpperCase():'M');
-  const brandBlock = (isClient && CLIENT)
-    ? `<div class="brand">${CLIENT.logo_url?`<img class="brandlogo-img" src="${esc(CLIENT.logo_url)}">`:`<div class="logo" style="background:${esc(CLIENT.brand_color||'#22c55e')}">${cinit}</div>`}<div><h1>${esc(CLIENT.name)}</h1><p>Delivered by Mercury</p></div></div>`
-    : `<div class="brand"><div class="logo logo-mark"><img class="logomark" src="${MLOGO}" alt="Mercury"></div><div><h1>Mercury</h1><p>Operations Platform</p></div></div>`;
-  const galleryNav = `<button class="nav-btn" data-page="gallery"><span class="ic">🖼</span> Photo Evidence</button>`;
-  const docsNav = `<button class="nav-btn" data-page="documents"><span class="ic">📁</span> Documents</button>`;
-  const projNav = `<button class="nav-btn" data-page="project"><span class="ic">📐</span> Project Plan</button>`;
-  el('root').innerHTML=`<div class="shell">
-    <aside class="sidebar">
-      ${brandBlock}
-      ${adminNav}
-      ${supplierNav}
-      ${isSupplier?'':`<div class="navlabel">${isClient?'Delivery':'Programme'}</div>
+  const staffNav = (!isOffice && !isClient && !isSupplier) ? `
+      <div class="navlabel">Programme</div>
       <button class="nav-btn active" data-page="overview"><span class="ic">◫</span> Overview</button>
       <button class="nav-btn" data-page="sites"><span class="ic">▦</span> Sites &amp; Progress</button>
       <button class="nav-btn" data-page="schedule"><span class="ic">▤</span> Schedule</button>
@@ -756,29 +818,38 @@ function renderShell(){
       <button class="nav-btn" data-page="teams"><span class="ic">⛺</span> Teams &amp; Routes</button>
       <button class="nav-btn" data-page="installs"><span class="ic">🔩</span> Install Reports</button>
       ${opsNav}
-      <div class="navlabel">${isClient?'Transparency':'Delivery'}</div>
-      ${isClient?'<button class="nav-btn" data-page="requests"><span class="ic">🛠</span> Request Work</button><button class="nav-btn" data-page="quotes"><span class="ic">📝</span> Request a Quote</button>':''}
-      ${isClient?'<button class="nav-btn" data-page="callouts"><span class="ic">🔧</span> Call-Out Reports</button><button class="nav-btn" data-page="shifts"><span class="ic">🗓</span> Shift Reports</button>':''}
-      ${isClient?'<button class="nav-btn" data-page="checkins"><span class="ic">📍</span> Site Check-ins</button>':''}
-      <button class="nav-btn" data-page="reports"><span class="ic">✓</span> ${isClient?'Latest Updates':'Activity Feed'}</button>
-      ${galleryNav}
-      ${projNav}
-      ${docsNav}
+      <div class="navlabel">Delivery</div>
+      <button class="nav-btn" data-page="reports"><span class="ic">✓</span> Activity Feed</button>
+      <button class="nav-btn" data-page="gallery"><span class="ic">🖼</span> Photo Evidence</button>
+      <button class="nav-btn" data-page="project"><span class="ic">📐</span> Project Plan</button>
+      <button class="nav-btn" data-page="documents"><span class="ic">📁</span> Documents</button>
       <button class="nav-btn" data-page="notify"><span class="ic">✉</span> Email Updates</button>
-      <button class="nav-btn" data-page="quality"><span class="ic">★</span> Quality &amp; Handover</button>
-      <button class="nav-btn" data-page="completed"><span class="ic">🗄</span> Completed Works</button>`}
+      <button class="nav-btn" data-page="completed"><span class="ic">🗄</span> Completed Works</button>` : '';
+  // Client-portal branding: show the client's logo/colour; "Delivered by Mercury"
+  const cinit=(CLIENT&&CLIENT.name?CLIENT.name.replace(/[^A-Za-z0-9]/g,'').charAt(0).toUpperCase():'M');
+  const brandBlock = (isClient && CLIENT)
+    ? `<div class="brand">${CLIENT.logo_url?`<img class="brandlogo-img" src="${esc(CLIENT.logo_url)}">`:`<div class="logo" style="background:${esc(CLIENT.brand_color||'#22c55e')}">${cinit}</div>`}<div><h1>${esc(CLIENT.name)}</h1><p>Delivered by Mercury</p></div></div>`
+    : `<div class="brand"><div class="logo logo-mark"><img class="logomark" src="${MLOGO}" alt="Mercury"></div><div><h1>Mercury</h1><p>Operations Platform</p></div></div>`;
+  el('root').innerHTML=`<div class="shell">
+    <aside class="sidebar">
+      ${brandBlock}
+      ${adminNav}
+      ${supplierNav}
+      ${clientNav}
+      ${staffNav}
       <div class="side-foot">Signed in as<br><b>${esc(PROFILE.full_name||PROFILE.email)}</b><br>${esc((PROFILE.role||'client').toUpperCase())}</div>
       <button class="logout" id="logoutBtn">Sign out</button>
     </aside>
     <div class="navscrim" onclick="document.body.classList.remove('nav-open')"></div>
     <div class="main">
+      ${(isAdmin && isClient)?`<div class="previewbar client"><span>👁 Viewing as client:</span>${CLIENTS.length>1?`<select onchange="previewClient(this.value)">${CLIENTS.map(c=>`<option value="${c.id}" ${CLIENT&&c.id===CLIENT.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`:`<b>${esc(CLIENT?CLIENT.name:'')}</b>`}<span class="spacer"></span><button onclick="setView('internal')">✕ Exit preview</button></div>`:''}
+      ${(isAdmin && SUPPREVIEW)?`<div class="previewbar supplier"><span>🚚 Viewing as supplier:</span>${SUPPLIERS.length>1?`<select onchange="enterSupplierPreview(this.value)">${SUPPLIERS.map(x=>`<option value="${x.id}" ${x.id===SUPPREVIEW?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:`<b>${esc(SUPPLIER?SUPPLIER.name:'')}</b>`}<span class="spacer"></span><button onclick="setView('internal')">✕ Exit preview</button></div>`:''}
       <div class="topbar">
         <button class="hamburger" onclick="document.body.classList.toggle('nav-open')">☰</button>
         <div class="tbtitle"><div class="crumb">${esc(isSupplier?(SUPPLIER?SUPPLIER.name:'Supplier'):(CLIENT?CLIENT.name:'No client'))}</div><h2 id="pageTitle">Programme Overview</h2></div>
         <div class="spacer"></div>
-        ${(CLIENTS.length>1 && !isSupplier)?`<select class="cli-select" id="cliSelect">${CLIENTS.map(c=>`<option value="${c.id}" ${CLIENT&&c.id===CLIENT.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`:''}
-        ${(SUPPREVIEW && SUPPLIERS.length>1)?`<select class="cli-select" onchange="enterSupplierPreview(this.value)">${SUPPLIERS.map(s=>`<option value="${s.id}" ${s.id===SUPPREVIEW?'selected':''}>${esc(s.name)}</option>`).join('')}</select>`:''}
-        ${PROFILE.role==='admin'?`<div class="toggle"><button id="bI" class="${(VIEW==='internal'&&!SUPPREVIEW)?'on':''}" onclick="setView('internal')">🛠 Internal</button><button id="bC" class="${VIEW==='client'?'on':''}" onclick="setView('client')">👁 Client</button>${SUPPLIERS.length?`<button id="bS" class="${SUPPREVIEW?'on':''}" onclick="enterSupplierPreview()">🚚 Supplier</button>`:''}</div>`:''}
+        ${(!isAdmin && !isSupplier && !isClient && CLIENTS.length>1)?`<select class="cli-select" id="cliSelect">${CLIENTS.map(c=>`<option value="${c.id}" ${CLIENT&&c.id===CLIENT.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`:''}
+        ${isOffice?`<span class="viewbadge internal" title="You are in the Mercury internal view">🛠 Internal</span>`:''}
         ${VIEW!=='client'?`<button class="theme-toggle" onclick="toggleTheme()" title="Light / dark mode">🌓</button>`:''}
         <div class="notifwrap" id="notifWrap">${bellHtml()}</div>
         <div class="live"><span class="beat"></span> Live</div>
@@ -791,7 +862,7 @@ function renderShell(){
   applySavedTheme();
   el('logoutBtn').addEventListener('click', async ()=>{ await sb.auth.signOut(); location.reload(); });
   const cs=el('cliSelect');
-  if(cs) cs.addEventListener('change', async e=>{ CLIENT=CLIENTS.find(c=>c.id===e.target.value); await loadClientData(); go(CURRENT); el('pageTitle').closest('.topbar').querySelector('.crumb').textContent=CLIENT.name; });
+  if(cs) cs.addEventListener('change', async e=>{ CLIENT=CLIENTS.find(c=>c.id===e.target.value); await loadClientData(); renderShell(); go(CURRENT); });
 }
 async function toggleTheme(){ const on=document.body.classList.toggle('theme-light'); try{localStorage.setItem('mercuryTheme',on?'light':'dark');}catch(e){} }
 function applySavedTheme(){ try{ if(VIEW!=='client' && localStorage.getItem('mercuryTheme')==='light') document.body.classList.add('theme-light'); else document.body.classList.remove('theme-light'); }catch(e){} }
@@ -802,7 +873,11 @@ async function setView(v){
   document.body.classList.toggle('client',v==='client');
   if(v==='client' && !CLIENT && CLIENTS.length){ CLIENT=CLIENTS[0]; await loadClientData(); }
   renderShell();
-  const dest = wasPreview ? (v==='client'?'overview':'hq') : ((v==='client' && CURRENT==='clients') ? 'overview' : CURRENT);
+  const CLIENT_ONLY=['overview','completed','checkins'];
+  let dest;
+  if(v==='client') dest='overview';
+  else dest = wasPreview ? 'suppliers' : (CLIENT_ONLY.includes(CURRENT) ? 'sites' : CURRENT);
+  if(v==='client' && PROFILE.role==='admin') window.scrollTo(0,0);
   go(dest);
 }
 
@@ -862,6 +937,9 @@ function gantt(){
 }
 function ring(p,label){const r=58,c=2*Math.PI*r,o=c-(p/100)*c;return `<div class="ring"><svg width="150" height="150" viewBox="0 0 150 150"><circle cx="75" cy="75" r="${r}" fill="none" stroke="var(--line2)" stroke-width="12"/><circle cx="75" cy="75" r="${r}" fill="none" stroke="url(#g)" stroke-width="12" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${o}"/><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#22c55e"/></linearGradient></defs></svg><div class="mid"><div><b>${p}%</b><span>${label}</span></div></div></div>`;}
 
+
+/* Office staff: switch which client is being previewed without leaving the preview */
+async function previewClient(id){ CLIENT=CLIENTS.find(c=>c.id===id)||CLIENT; await loadClientData(); renderShell(); go(CURRENT); }
 /* ============ PAGES ============ */
 /* milestones: a delivery "story" from sites, QA sign-offs and reports */
 function milestones(){
@@ -2415,10 +2493,11 @@ function pageClients(){
         <div class="th"><div class="nm"><span class="tdot" style="background:${esc(c.brand_color||'#38bdf8')}"></span>${esc(c.name)}</div>${isAdmin?`<button class="edit-btn" onclick="event.stopPropagation();openClientForm('${c.id}')">Edit</button>`:''}</div>
         ${c.programme_title?`<div class="meta"><span>Programme</span><b>${esc(c.programme_title)}</b></div>`:''}
         ${loginHtml}
-        <div style="margin-top:11px"><button class="btn" style="width:100%;padding:9px" onclick="enterClient('${c.id}')">Open dashboard →</button></div>
+        <div style="margin-top:11px"><button class="btn" style="width:100%;padding:9px" onclick="enterClient('${c.id}')">Open client →</button></div>
+        ${isAdmin?`<div style="margin-top:8px"><button class="edit-btn" style="width:100%" onclick="viewAsClient('${c.id}')">👁 View as client</button></div>`:''}
         ${isAdmin?`<div style="display:flex;gap:8px;margin-top:8px"><button class="edit-btn" style="flex:1" onclick="openLinkLogin('${c.id}')">🔗 Link login</button><button class="edit-btn" style="flex:none;color:var(--red)" onclick="deleteClient('${c.id}')" title="Delete client">🗑</button></div>`:''}
       </div>`;}).join('')}</div>
-     <div class="note" style="margin-top:14px">Tip: you can also switch client any time using the dropdown at the top of the screen.</div>`;
+     <div class="note" style="margin-top:14px">Tip: you can also switch client any time with the Client picker in the side menu.</div>`;
 }
 function openLinkLogin(clientId){
   const c=CLIENTS.find(x=>x.id===clientId)||{};
@@ -2494,6 +2573,9 @@ async function submitClient(clientId){
   msg('✓ Saved.','ok'); await refreshClients(); setTimeout(()=>{ closeForm(); renderShell(); go('clients'); },600);
 }
 
+
+/* Office staff: open the client portal exactly as that client sees it */
+async function viewAsClient(id){ CLIENT=CLIENTS.find(c=>c.id===id)||CLIENT; await loadClientData(); setView('client'); }
 /* ===================================================================
    COMMAND CENTRE  —  live ops: SLA timers, map, today board, check-in
    =================================================================== */
@@ -4301,6 +4383,7 @@ function pageSuppliers(){
         ${sc.tsPending?`<div class="meta"><span>Timesheets</span><b><span class="chip amber">${sc.tsPending} to approve</span></b></div>`:''}
         ${loginHtml}
         <div style="margin-top:11px"><button class="btn" style="width:100%;padding:9px" onclick="openSupManage('${s.id}')">Manage supplier →</button></div>
+        <div style="margin-top:8px"><button class="edit-btn" style="width:100%" onclick="enterSupplierPreview('${s.id}')">👁 View as supplier</button></div>
         <div style="display:flex;gap:8px;margin-top:8px"><button class="edit-btn" style="flex:1" onclick="openSupplierForm('${s.id}')">Edit</button><button class="edit-btn" style="flex:1" onclick="openSupLinkLogin('${s.id}')">🔗 Link login</button><button class="edit-btn" style="flex:none;color:var(--red)" onclick="deleteSupplier('${s.id}')" title="Delete supplier">🗑</button></div>
       </div>`;}).join('')}</div>`;
   // pending timesheets across all suppliers
@@ -4556,24 +4639,24 @@ function pageSupHome(){
   const k=`<div class="grid kpis" style="margin-bottom:14px">
     ${kpi('cyan','👷','My engineers',engs.length,'',  'sup_engineers')}
     ${kpi('green','✓','Approved',approved,'','sup_engineers')}
-    ${kpi('','🗓','Active assignments',active.length,'','sup_jobs')}
+    ${kpi('','🗓','Active bookings',active.length,'','sup_jobs')}
     ${kpi(tsSub?'amber':'','⏱','Timesheets submitted',tsSub,'','sup_timesheets')}
   </div>`;
   const flagHtml = flagged.length ? `<div class="card" style="margin-bottom:14px;border:1px solid var(--line2)"><h4 style="margin:0 0 8px">⚠ Performance flags</h4>${flagged.map(e=>`<div class="meta"><span>${flagDot(engFlagFor(e))} ${esc(e.full_name)}</span><b>${engFlagFor(e)==='red'?'At risk':'Watch'}</b></div>`).join('')}<div class="note" style="font-size:11.5px;margin-top:6px">Based on Mercury’s site ratings. Open <b>Performance</b> for detail.</div></div>` : '';
   const upcoming = active.slice().sort((a,b)=>String(a.start_date||'').localeCompare(String(b.start_date||''))).slice(0,8);
-  const asgHtml = upcoming.length ? `<div class="card" style="overflow-x:auto"><h4 style="margin:0 0 10px">🗓 Current &amp; upcoming assignments</h4>
+  const asgHtml = upcoming.length ? `<div class="card" style="overflow-x:auto"><h4 style="margin:0 0 10px">🗓 Current &amp; upcoming bookings</h4>
     <table class="tbl"><thead><tr><th>Dates</th><th>Engineer</th><th>Job</th><th>Where</th><th>Shift</th><th>Status</th></tr></thead><tbody>
     ${upcoming.map(a=>`<tr><td>${esc(String(a.start_date||'').slice(0,10))}${a.end_date?' → '+esc(String(a.end_date).slice(0,10)):''}</td><td>${esc(supEngName(a.engineer_id))}</td><td>${esc(a.title||'—')}</td><td>${esc(a.site_label||supClientName(a.client_id)||'—')}</td><td>${esc(a.shift||'—')}</td><td>${statusChip(a.status)}</td></tr>`).join('')}
-    </tbody></table></div>` : emptyState('🗓','No active assignments','When Mercury books your engineers onto a job, it appears here.');
-  return `<div class="sechead"><h3>Welcome, ${esc(SUPPLIER.name)}</h3><span class="sub">Your live view of engineers, jobs, timesheets &amp; performance</span><span class="line"></span></div>`+k+flagHtml+asgHtml;
+    </tbody></table></div>` : emptyState('🗓','No active bookings','When Mercury books your engineers onto a job, it appears here.');
+  return `<div class="sechead"><h3>Welcome, ${esc(SUPPLIER.name)}</h3><span class="sub">Your live view of bookings, timesheets, engineers &amp; compliance</span><span class="line"></span></div>`+k+asgHtml;
 }
 function pageSupEngineers(){
   if(!SUPPLIER) return pageSupHome();
   const engs=(SDATA.engineers||[]).slice().sort((a,b)=>String(a.full_name||'').localeCompare(String(b.full_name||'')));
-  const header=`<div class="sechead"><h3>My Engineers</h3><span class="sub">${engs.length} on your books · add their certificates, cards &amp; right-to-work</span><span class="line"></span><button class="addbtn" onclick="openSupEngineerForm()">＋ Add engineer</button></div>`;
+  const header=`<div class="sechead"><h3>Engineers</h3><span class="sub">${engs.length} on your books · add their certificates, cards &amp; right-to-work</span><span class="line"></span><button class="addbtn" onclick="openSupEngineerForm()">＋ Add engineer</button></div>`;
   if(!engs.length) return header+emptyState('👷','No engineers yet','Tap “Add engineer” to register your first worker and upload their cards.');
   return header+`<div class="teamgrid">${engs.map(e=>{ const f=engFlagFor(e); return `<div class="teamcard">
-    <div class="th"><div class="nm">${flagDot(f)} ${esc(e.full_name)}</div>${statusChip(e.status)}</div>
+    <div class="th"><div class="nm">${esc(e.full_name)}</div>${statusChip(e.status)}</div>
     ${e.trade?`<div class="meta"><span>Trade</span><b>${esc(e.trade)}</b></div>`:''}
     ${e.phone?`<div class="meta"><span>Phone</span><b>${esc(e.phone)}</b></div>`:''}
     <div class="meta"><span>Right to work</span><b><span class="chip ${e.rtw_status==='Verified'?'green':e.rtw_status==='Expired'?'red':'amber'}">${esc(e.rtw_status||'Not checked')}</span></b></div>
@@ -4672,7 +4755,7 @@ function pageSupJobs(){
   if(!SUPPLIER) return pageSupHome();
   const asgs=(SDATA.assignments||[]).slice().sort((a,b)=>String(b.start_date||'').localeCompare(String(a.start_date||'')));
   const toFill=asgs.filter(a=>!a.engineer_id && a.status!=='Cancelled');
-  const header=`<div class="sechead"><h3>My Assignments</h3><span class="sub">Jobs Mercury has booked your engineers onto</span><span class="line"></span></div>`;
+  const header=`<div class="sechead"><h3>Bookings</h3><span class="sub">Jobs Mercury has booked your engineers onto</span><span class="line"></span></div>`;
   if(!asgs.length) return header+emptyState('🗓','No assignments yet','When Mercury assigns your engineers to a job it will appear here with dates, location and shift.');
   const fillBanner = toFill.length ? `<div class="card" style="margin-bottom:12px;border:1px solid var(--amber);background:linear-gradient(180deg,rgba(245,158,11,.08),transparent)"><b>🗓 ${toFill.length} job${toFill.length===1?'':'s'} to fill</b> — Mercury has sent you ${toFill.length===1?'a job':'jobs'} to staff. Tap <b>Fill</b> to assign one of your engineers.</div>` : '';
   return header+fillBanner+`<div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Dates</th><th>Engineer</th><th>Job</th><th>Client</th><th>Where</th><th>Shift</th><th>Rate</th><th>Status</th><th></th></tr></thead><tbody>
@@ -4763,14 +4846,14 @@ function pageSupFeedback(){
   if(!SUPPLIER) return pageSupHome();
   const engs=(SDATA.engineers||[]).slice().sort((a,b)=>String(a.full_name||'').localeCompare(String(b.full_name||'')));
   const ratings=(SDATA.ratings||[]).slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
-  const board=`<div class="card" style="margin-bottom:14px"><h4 style="margin:0 0 10px">🚦 Engineer traffic light</h4><div class="teamgrid">${engs.map(e=>{ const f=engFlagFor(e); const rs=ratings.filter(r=>r.engineer_id===e.id); const sc=[]; rs.forEach(r=>['quality','safety','timekeeping','attitude'].forEach(k=>{ if(r[k]!=null) sc.push(Number(r[k])); })); const avg=sc.length?(sc.reduce((a,b)=>a+b,0)/sc.length):null; return `<div class="teamcard" style="padding:12px"><div class="th"><div class="nm">${flagDot(f)} ${esc(e.full_name)}</div></div><div class="meta"><span>Rating</span><b>${avg!=null?avg.toFixed(1)+' / 5':'<span class="muted">—</span>'}</b></div><div class="meta"><span>Reviews</span><b>${rs.length}</b></div></div>`; }).join('')}</div><div class="note" style="font-size:11.5px;margin-top:8px">Lights are set by Mercury from site performance. Green = performing well, amber = watch, red = at risk.</div></div>`;
+  const board=`<div class="card" style="margin-bottom:14px"><h4 style="margin:0 0 10px">🚦 Engineer traffic light</h4><div class="teamgrid">${engs.map(e=>{ const f=engFlagFor(e); const rs=ratings.filter(r=>r.engineer_id===e.id); const sc=[]; rs.forEach(r=>['quality','safety','timekeeping','attitude'].forEach(k=>{ if(r[k]!=null) sc.push(Number(r[k])); })); const avg=sc.length?(sc.reduce((a,b)=>a+b,0)/sc.length):null; return `<div class="teamcard" style="padding:12px"><div class="th"><div class="nm">${esc(e.full_name)}</div></div><div class="meta"><span>Rating</span><b>${avg!=null?avg.toFixed(1)+' / 5':'<span class="muted">—</span>'}</b></div><div class="meta"><span>Reviews</span><b>${rs.length}</b></div></div>`; }).join('')}</div><div class="note" style="font-size:11.5px;margin-top:8px">Lights are set by Mercury from site performance. Green = performing well, amber = watch, red = at risk.</div></div>`;
   const feedList = ratings.length ? `<div class="card"><h4 style="margin:0 0 10px">💬 Recent feedback</h4>${ratings.slice(0,30).map(r=>{ const parts=[['Quality',r.quality],['Safety',r.safety],['Timekeeping',r.timekeeping],['Attitude',r.attitude]].filter(p=>p[1]!=null).map(p=>`${p[0]} ${'★'.repeat(p[1])}`).join(' · '); return `<div style="padding:10px 0;border-bottom:1px solid var(--line)"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><b>${esc(supEngName(r.engineer_id))}</b><span class="muted" style="font-size:12px">${esc(String(r.created_at||'').slice(0,10))}</span></div>${parts?`<div style="font-size:12.5px;color:var(--cyan);margin-top:2px">${parts}</div>`:''}${(r.no_show||r.incident)?`<div style="margin-top:3px">${r.no_show?'<span class="chip red">No-show</span> ':''}${r.incident?'<span class="chip red">Safety incident</span>':''}</div>`:''}${r.comment?`<div style="margin-top:4px">${esc(r.comment)}</div>`:''}</div>`; }).join('')}</div>` : emptyState('💬','No feedback yet','Mercury’s ratings of your engineers will appear here.');
   return `<div class="sechead"><h3>Performance &amp; Feedback</h3><span class="sub">How your engineers are rated on site</span><span class="line"></span></div>`+board+feedList;
 }
 function pageSupDocs(){
   if(!SUPPLIER) return pageSupHome();
   const docs=(SDATA.documents||[]).slice().sort((a,b)=>String(a.label||'').localeCompare(String(b.label||'')));
-  const header=`<div class="sechead"><h3>Company Documents</h3><span class="sub">Insurance, accreditations &amp; policies</span><span class="line"></span><button class="addbtn" onclick="openSupDocForm()">＋ Add document</button></div>`;
+  const header=`<div class="sechead"><h3>Compliance &amp; Documents</h3><span class="sub">Insurance, accreditations &amp; policies</span><span class="line"></span><button class="addbtn" onclick="openSupDocForm()">＋ Add document</button></div>`;
   if(!docs.length) return header+emptyState('📁','No documents yet','Upload your insurance, accreditations and key policies here.');
   return header+`<div class="card"><table class="tbl"><thead><tr><th>Document</th><th>Type</th><th>Expiry</th><th></th><th></th></tr></thead><tbody>
     ${docs.map(d=>`<tr><td><b>${esc(d.label)}</b></td><td>${esc(d.doc_type||'—')}</td><td>${d.expiry?`<span class="chip ${cardStatus(d.expiry).c}">${esc(String(d.expiry).slice(0,10))}</span>`:'—'}</td><td>${d.file_path?`<a href="${esc(d.file_path)}" target="_blank" rel="noopener">📄 View</a>`:'<span class="muted">no file</span>'}</td><td><button class="edit-btn" style="color:var(--red)" onclick="deleteSupDoc('${d.id}')">🗑</button></td></tr>`).join('')}
@@ -5008,11 +5091,16 @@ async function ntfRemove(id){
   await ntfReload();
 }
 
-const TITLES={hq:'HQ — Business Overview',digest:'Daily Digest',clients:'Clients',jobs:'Job Status — Mobilisation Control',completed:'Completed Works',crm:'CRM — Client Engagement',command:'Command Centre',checkins:'Site Check-ins',engineers:'Engineers — Team Register',compliance:'Compliance — Expiries & Right to Work',overview:'Programme Overview',sites:'Sites & Progress',schedule:'Schedule',rota:'Shift Rota',teams:'Teams & Routes',installs:'Install Reports',risks:'Risk Register',callouts:'Call-Out Reports',shifts:'Shift Reports',reports:'Activity Feed',gallery:'Photo Evidence',analytics:'Analytics & Insights',documents:'Documents',notify:'Email Updates',project:'Project Plan',requests:'Work Requests',quotes:'Quote Requests',quality:'Quality & Handover',suppliers:'Suppliers — Labour Partners',finance:'Profit & Margins',sup_home:'Supplier Dashboard',sup_engineers:'My Engineers',sup_jobs:'My Assignments',sup_timesheets:'Timesheets',sup_feedback:'Performance & Feedback',sup_docs:'Company Documents'};
+/* Pages that still show the client picked in the side menu (release 9) */
+const CLIENT_SCOPED_PAGES=['sites','schedule','rota','teams','callouts','shifts','installs','gallery','project','documents','notify','command','risks','crm','quotes','requests','reports','analytics','overview','completed','checkins'];
+const TITLES={hq:'HQ — Business Overview',digest:'Daily Digest',clients:'Clients',jobs:'Job Status — Mobilisation Control',completed:'Completed Works',crm:'CRM — Client Engagement',command:'Command Centre',checkins:'Site Check-ins',engineers:'Engineers — Team Register',compliance:'Compliance — Expiries & Right to Work',overview:'Programme Overview',sites:'Progress',schedule:'Schedule',rota:'Shift Rota',teams:'Teams & Routes',installs:'Install Reports',risks:'Risk Register',callouts:'Call-Out Reports',shifts:'Shift Reports',reports:'Activity Feed',gallery:'Photo Evidence',analytics:'Analytics & Insights',documents:'Documents',notify:'Email Updates',project:'Project Plan',requests:'Work Requests',quotes:'Quote Requests',quality:'Quality & Handover',suppliers:'Suppliers — Labour Partners',finance:'Profit & Margins',sup_home:'Dashboard',sup_engineers:'Engineers',sup_jobs:'Bookings',sup_timesheets:'Timesheets',sup_feedback:'Performance & Feedback',sup_docs:'Compliance & Documents'};
 function go(page){
   CURRENT=page;
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
   const pt=el('pageTitle'); if(pt) pt.textContent=TITLES[page]||'';
+  // Office staff: the small heading shows the client only on pages that work on the selected client
+  try{ if(PROFILE && PROFILE.role==='admin' && VIEW!=='client' && !SUPPREVIEW){ const cr=document.querySelector('.topbar .crumb');
+    if(cr) cr.textContent = CLIENT_SCOPED_PAGES.includes(page) && CLIENT ? CLIENT.name : 'Mercury'; } }catch(e){}
   let html='';
   try{
     if(page==='hq')html=pageHQ();
