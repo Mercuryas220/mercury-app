@@ -573,7 +573,7 @@ async function startApp(){
   clients = clients || [];
   if(PROFILE.role!=='admin' && PROFILE.client_id) clients = clients.filter(c=>c.id===PROFILE.client_id);
   CLIENTS = clients;
-  CLIENT = CLIENTS[0] || null;
+  CLIENT = CLIENTS.find(c=>!c.archived_at) || CLIENTS[0] || null;
   // clients see the portal view; admins/engineers default to internal
   VIEW = (PROFILE.role==='client') ? 'client' : 'internal';
   document.body.classList.toggle('client', VIEW==='client');
@@ -737,7 +737,7 @@ function renderShell(){
       ${nb('command','🛰','Command Centre')}
       ${nl('💼 Sales')}
       ${nb('qrequests','📥','Quote Requests')}
-      ${nb('crm','🤝','CRM')}
+      ${nb('pipeline','🎯','Pipeline')}
       ${nb('quotereg','📝','Quotes')}
       ${nb('clients','🗂','Clients')}
       ${nl('📋 Jobs')}
@@ -759,7 +759,7 @@ function renderShell(){
       ${nb('analytics','📊','Analytics')}
       <div class="navclient">
         <label for="cliSelect">Client</label>
-        ${CLIENTS.length?`<select id="cliSelect">${CLIENTS.map(c=>`<option value="${c.id}" ${CLIENT&&c.id===CLIENT.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`:'<div class="muted" style="font-size:12px">No clients yet</div>'}
+        ${CLIENTS.length?`<select id="cliSelect">${activeClients().concat(CLIENT&&CLIENT.archived_at?[CLIENT]:[]).map(c=>`<option value="${c.id}" ${CLIENT&&c.id===CLIENT.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`:'<div class="muted" style="font-size:12px">No clients yet</div>'}
         ${CLIENT?`<button class="navclient-view" onclick="setView('client')">👁 View as client</button>`:''}
       </div>
       ${CLIENT?`${nl('🏢 '+esc(CLIENT.name))}
@@ -853,7 +853,7 @@ function renderShell(){
         <button class="hamburger" onclick="document.body.classList.toggle('nav-open')">☰</button>
         <div class="tbtitle"><div class="crumb">${esc(isSupplier?(SUPPLIER?SUPPLIER.name:'Supplier'):(CLIENT?CLIENT.name:'No client'))}</div><h2 id="pageTitle">Programme Overview</h2></div>
         <div class="spacer"></div>
-        ${(!isAdmin && !isSupplier && !isClient && CLIENTS.length>1)?`<select class="cli-select" id="cliSelect">${CLIENTS.map(c=>`<option value="${c.id}" ${CLIENT&&c.id===CLIENT.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`:''}
+        ${(!isAdmin && !isSupplier && !isClient && CLIENTS.length>1)?`<select class="cli-select" id="cliSelect">${activeClients().map(c=>`<option value="${c.id}" ${CLIENT&&c.id===CLIENT.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`:''}
         ${isOffice?`<span class="viewbadge internal" title="You are in the Mercury internal view">🛠 Internal</span>`:''}
         ${VIEW!=='client'?`<button class="theme-toggle" onclick="toggleTheme()" title="Light / dark mode">🌓</button>`:''}
         <div class="notifwrap" id="notifWrap">${bellHtml()}</div>
@@ -2485,25 +2485,7 @@ async function loadSupplierData(){
 // resolve a client/site/engineer name for display
 function supClientName(id){ const c=(CLIENTS||[]).find(x=>x.id===id); return c?c.name:''; }
 function supEngName(id){ const e=(SDATA.engineers||[]).find(x=>x.id===id); return e?e.full_name:'—'; }
-function pageClients(){
-  const isAdmin=PROFILE.role==='admin';
-  const header=`<div class="sechead"><h3>Clients</h3><span class="sub">${CLIENTS.length} client${CLIENTS.length===1?'':'s'} · open one, or add a new one</span><span class="line"></span>${isAdmin?`<button class="addbtn" onclick="openClientForm()">＋ Add client</button>`:''}</div>`;
-  const help = isAdmin ? `<div class="card tip" style="margin-bottom:14px;background:linear-gradient(180deg,rgba(34,197,94,.08),rgba(56,189,248,.05));border:1px solid var(--line2)"><h4 style="margin-bottom:6px">➕ Adding a new client — 3 simple steps</h4><div class="csub" style="margin:0">1. Tap <b>＋ Add client</b> and give it a name. &nbsp; 2. In Supabase → Authentication → Users, <b>Add user</b> (their email + a password). &nbsp; 3. Back here, tap <b>🔗 Link login</b> on the client and paste that email. Done — no SQL.</div></div>` : '';
-  if(!CLIENTS.length) return header+help+emptyState('🗂','No clients yet','Tap “Add client” to create your first one.');
-  return header + help +
-    `<div class="teamgrid">${CLIENTS.map(c=>{
-      const logins=(LOGINS||[]).filter(l=>l.client_id===c.id);
-      const loginHtml = isAdmin ? `<div class="meta" style="align-items:flex-start"><span>Login</span><b style="text-align:right">${logins.length?logins.map(l=>`<span class="chip green" style="margin:1px 0 1px 4px">${esc(l.email)}</span>`).join('<br>'):'<span class="chip amber">none linked yet</span>'}</b></div>` : '';
-      return `<div class="teamcard">
-        <div class="th"><div class="nm"><span class="tdot" style="background:${esc(c.brand_color||'#38bdf8')}"></span>${esc(c.name)}</div>${isAdmin?`<button class="edit-btn" onclick="event.stopPropagation();openClientForm('${c.id}')">Edit</button>`:''}</div>
-        ${c.programme_title?`<div class="meta"><span>Programme</span><b>${esc(c.programme_title)}</b></div>`:''}
-        ${loginHtml}
-        <div style="margin-top:11px"><button class="btn" style="width:100%;padding:9px" onclick="enterClient('${c.id}')">Open client →</button></div>
-        ${isAdmin?`<div style="margin-top:8px"><button class="edit-btn" style="width:100%" onclick="viewAsClient('${c.id}')">👁 View as client</button></div>`:''}
-        ${isAdmin?`<div style="display:flex;gap:8px;margin-top:8px"><button class="edit-btn" style="flex:1" onclick="openLinkLogin('${c.id}')">🔗 Link login</button><button class="edit-btn" style="flex:none;color:var(--red)" onclick="deleteClient('${c.id}')" title="Delete client">🗑</button></div>`:''}
-      </div>`;}).join('')}</div>
-     <div class="note" style="margin-top:14px">Tip: you can also switch client any time with the Client picker in the side menu.</div>`;
-}
+/* pageClients: see js/30-clients.js (release 13) */
 function openLinkLogin(clientId){
   const c=CLIENTS.find(x=>x.id===clientId)||{};
   const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
@@ -2528,19 +2510,9 @@ async function submitLinkLogin(clientId){
   const {error}=await sb.from('profiles').update({role:'client', client_id:clientId}).eq('id',prof.id);
   if(error){ btn.disabled=false; btn.textContent='🔗 Link login'; msg('Could not link: '+error.message,'err'); return; }
   msg('✓ Linked. That login now sees only this client.','ok');
-  await loadLogins(); setTimeout(()=>{ closeForm(); renderShell(); go('clients'); }, 800);
+  await loadLogins(); setTimeout(()=>{ closeForm(); renderShell(); if(CURRENT==='clientrec') clTab('logins'); else go('clients'); }, 800);
 }
-async function deleteClient(clientId){
-  const c=CLIENTS.find(x=>x.id===clientId)||{};
-  if(!confirm('Delete "'+(c.name||'this client')+'" and ALL of its sites, reports, photos, documents and schedule?\n\nThis cannot be undone. Any login attached will be unlinked (the Supabase account itself stays — delete that in Supabase if you no longer need it).')) return;
-  try{
-    await sb.from('profiles').update({client_id:null}).eq('client_id',clientId);
-    const {error}=await sb.from('clients').delete().eq('id',clientId);
-    if(error){ alert('Could not delete: '+error.message); return; }
-  }catch(e){ alert('Could not delete: '+(e.message||e)); return; }
-  if(CLIENT && CLIENT.id===clientId) CLIENT=CLIENTS.find(x=>x.id!==clientId)||null;
-  await refreshClients(); await loadLogins(); closeForm(); renderShell(); go('clients');
-}
+/* Clients are archived, not deleted (release 13): see clArchive in js/30-clients.js */
 function slugify(n){return String(n||'').toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');}
 async function refreshClients(){ try{ const r=await sb.from('clients').select('*').order('name'); CLIENTS=r.data||[]; }catch(e){} }
 function openClientForm(clientId){
@@ -2575,7 +2547,7 @@ async function submitClient(clientId){
   const row={ name:name, slug:slug, brand_color:val('c_color')||'#38bdf8', programme_title:val('c_prog')||null, system_ref:val('c_sys')||null, logo_url:logo, is_active:true };
   const res = clientId ? await sb.from('clients').update(row).eq('id',clientId) : await sb.from('clients').insert(row);
   if(res.error){ btn.disabled=false; btn.textContent=clientId?'Save changes':'Add client'; msg('Could not save: '+res.error.message+(res.error.message.includes('duplicate')?' (that short code is taken — change the slug)':''),'err'); return; }
-  msg('✓ Saved.','ok'); await refreshClients(); setTimeout(()=>{ closeForm(); renderShell(); go('clients'); },600);
+  msg('✓ Saved.','ok'); await refreshClients(); if(typeof CLX!=='undefined') CLX=null; setTimeout(()=>{ closeForm(); renderShell(); go(CURRENT==='clientrec'?'clientrec':'clients'); },600);
 }
 
 
@@ -3027,185 +2999,79 @@ async function deleteProjectDoc(id){
 }
 
 /* ===================================================================
-   INTERNAL CRM  —  client engagement (ADMIN ONLY, never client-visible)
-   Status & next follow-up · contacts · engagement log · pipeline.
+   PIPELINE  —  release 13 (replaces the per-client CRM page).
+   A cross-client view of leads and quotes by status, with follow-ups
+   due, filtered by Project Owner / Manager and client. CRM
+   opportunities were replaced by leads on Quotes; the relationship,
+   contacts and activity log moved to the client record page.
    =================================================================== */
-function pageCRM(){
-  if(PROFILE.role!=='admin') return emptyState('🔒','Admins only','The CRM is internal to Mercury and not visible to clients.');
-  if(!CLIENT) return emptyState('👈','Choose a client','Pick a client from the dropdown to see and update their engagement, contacts and pipeline.');
-  const st=DATA.crmStatus||{};
-  const contacts=DATA.crmContacts||[];
-  const logs=(DATA.crmLog||[]).slice().sort((a,b)=>new Date(b.occurred_at||b.created_at)-new Date(a.occurred_at||a.created_at));
-  const opps=DATA.crmOpps||[];
-  const fs=followState(st.next_follow_up);
-  const openPipe=opps.filter(o=>!['Won','Lost'].includes(String(o.stage||''))).reduce((a,o)=>a+Number(o.value||0),0);
-  const wonPipe=opps.filter(o=>String(o.stage||'')==='Won').reduce((a,o)=>a+Number(o.value||0),0);
-  const header=`<div class="sechead"><h3>🤝 CRM — ${esc(CLIENT.name)}</h3><span class="sub">Internal engagement record · not visible to the client</span><span class="line"></span></div>`;
-  const status=`<div class="card"><div class="sechead" style="margin:0 0 10px"><h4 style="margin:0">Relationship</h4><span class="line"></span><button class="edit-btn" onclick="openCrmStatusForm()">Edit</button></div>
-    <div class="crmmeta">
-      <div><span>Stage</span>${crmStageChip(st.stage)}</div>
-      <div><span>Next follow-up</span>${st.next_follow_up?`<span class="chip ${fs.c}">${esc(fs.label||String(st.next_follow_up).slice(0,10))}</span>`:'<span class="muted">none set</span>'}</div>
-      <div><span>Account owner</span><b>${esc(st.owner||'—')}</b></div>
-      <div><span>Open pipeline</span><b>${gbp(openPipe)}</b></div>
-      <div><span>Won to date</span><b>${gbp(wonPipe)}</b></div>
-    </div>${st.notes?`<div class="crmnote">${esc(st.notes)}</div>`:''}</div>`;
-  // contacts
-  const contactRows=contacts.length?contacts.map(c=>`<div class="litem"><div class="av">${esc((c.name||'·').split(' ').map(w=>w[0]).join('').slice(0,2))}</div>
-      <div class="bd"><div class="t">${esc(c.name)}${c.is_primary?' <span class="chip cyan" style="margin-left:4px">Primary</span>':''}</div>
-      <div class="m">${[c.role,c.phone,c.email].filter(Boolean).map(esc).join(' · ')||'—'}</div></div>
-      <div class="when"><button class="edit-btn" onclick="openContactForm('${c.id}')">Edit</button></div></div>`).join('')
-    :'<div class="empty"><div class="big">👤</div><b>No contacts yet</b></div>';
-  const contactsCard=`<div class="card"><div class="sechead" style="margin:0 0 10px"><h4 style="margin:0">Contacts</h4><span class="line"></span><button class="edit-btn" onclick="openContactForm()">＋ Add contact</button></div><div class="list">${contactRows}</div></div>`;
-  // engagement log
-  const logRows=logs.length?logs.map(l=>`<div class="litem"><div class="av">${itypeIcon(l.itype)}</div>
-      <div class="bd"><div class="t">${esc(l.itype||'Note')}${l.logged_by?` <span class="muted" style="font-weight:500">· ${esc(l.logged_by)}</span>`:''}</div>
-      <div class="m">${esc(l.summary||'')}</div></div>
-      <div class="when">${esc(String(l.occurred_at||l.created_at||'').slice(0,10))}<br><button class="edit-btn" style="color:var(--red)" onclick="deleteInteraction('${l.id}')">Delete</button></div></div>`).join('')
-    :'<div class="empty"><div class="big">🗒</div><b>No engagement logged yet</b></div>';
-  const logCard=`<div class="card"><div class="sechead" style="margin:0 0 10px"><h4 style="margin:0">Engagement log</h4><span class="line"></span><button class="edit-btn" onclick="openInteractionForm()">＋ Log engagement</button></div><div class="list">${logRows}</div></div>`;
-  // opportunities
-  const oppRows=opps.length?opps.map(o=>`<tr>
-      <td><b>${esc(o.title)}</b>${o.expected_close?`<div class="muted" style="font-size:11px">close ${String(o.expected_close).slice(0,10)}</div>`:''}</td>
-      <td>${oppStageChip(o.stage)}</td>
-      <td>${o.value!=null?gbp(o.value):'—'}</td>
-      <td style="text-align:right"><button class="edit-btn" onclick="openOppForm('${o.id}')">Edit</button></td></tr>`).join('')
-    :'<tr><td colspan="4" class="muted" style="text-align:center;padding:16px">No opportunities yet.</td></tr>';
-  const oppCard=`<div class="card"><div class="sechead" style="margin:0 0 10px"><h4 style="margin:0">Opportunities / pipeline</h4><span class="line"></span><button class="edit-btn" onclick="openOppForm()">＋ Add opportunity</button></div>
-    <table><thead><tr><th>Opportunity</th><th>Stage</th><th>Value</th><th></th></tr></thead><tbody>${oppRows}</tbody></table></div>`;
-  return header+status+`<div class="row2" style="margin-top:16px">${contactsCard}${logCard}</div><div style="margin-top:16px">${oppCard}</div>`;
-}
-async function refreshCRM(){ await loadClientData(); go('crm'); }
-/* --- status --- */
-function openCrmStatusForm(){
-  const st=DATA.crmStatus||{};
-  const stageOpts=`<option value="">— set stage —</option>`+CRM_STAGES.map(s=>`<option ${st.stage===s?'selected':''}>${s}</option>`).join('');
-  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal"><div class="modal-h"><h3>Relationship — ${esc(CLIENT.name)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
-    <div class="modal-b">
-      ${engineerDatalist()}
-      <div class="frow">
-        <div class="fld"><label>Stage</label><select id="cs_stage">${stageOpts}</select></div>
-        <div class="fld"><label>Next follow-up</label><input id="cs_follow" type="date" value="${st.next_follow_up?String(st.next_follow_up).slice(0,10):''}"></div>
-      </div>
-      <div class="fld"><label>Account owner</label><input id="cs_owner" list="engList" value="${esc(st.owner||PROFILE.full_name||'')}"></div>
-      <div class="fld"><label>Notes</label><textarea id="cs_notes" placeholder="Relationship notes, account plan, anything useful">${esc(st.notes||'')}</textarea></div>
-    </div>
-    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="csSave" onclick="submitCrmStatus()">Save</button></div>
-    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
-  document.body.appendChild(wrap);
-}
-async function submitCrmStatus(){
-  const btn=el('csSave'); btn.disabled=true; btn.textContent='Saving…'; msg('','');
-  const row={ client_id:CLIENT.id, stage:val('cs_stage')||null, next_follow_up:val('cs_follow')||null, owner:val('cs_owner')||null, notes:val('cs_notes')||null, updated_at:new Date().toISOString() };
-  const {error}=await sb.from('crm_status').upsert(row,{onConflict:'client_id'});
-  if(error){ btn.disabled=false; btn.textContent='Save'; msg('Could not save: '+error.message,'err'); return; }
-  msg('✓ Saved.','ok'); await loadClientData(); setTimeout(()=>{ closeForm(); go('crm'); },500);
-}
-/* --- contacts --- */
-function openContactForm(id){
-  const c=id?((DATA.crmContacts||[]).find(x=>x.id===id)||{}):{};
-  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal"><div class="modal-h"><h3>${id?'Edit Contact':'Add Contact'}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
-    <div class="modal-b">
-      <div class="frow">
-        <div class="fld"><label>Name <span class="req">*</span></label><input id="ct_name" value="${esc(c.name||'')}" placeholder="Full name"></div>
-        <div class="fld"><label>Role / title</label><input id="ct_role" value="${esc(c.role||'')}" placeholder="e.g. Facilities Manager"></div>
-      </div>
-      <div class="frow">
-        <div class="fld"><label>Phone</label><input id="ct_phone" value="${esc(c.phone||'')}"></div>
-        <div class="fld"><label>Email</label><input id="ct_email" value="${esc(c.email||'')}"></div>
-      </div>
-      <label class="ms-done" style="display:flex;align-items:center;gap:7px;margin:8px 0;font-size:13px"><input type="checkbox" id="ct_primary" ${c.is_primary?'checked':''}> Primary contact</label>
-      <div class="fld"><label>Notes</label><textarea id="ct_notes" placeholder="Anything useful">${esc(c.notes||'')}</textarea></div>
-    </div>
-    <div class="modal-foot">${id?`<button class="btn-ghost" style="color:var(--red)" onclick="deleteContact('${id}')">Delete</button>`:''}<button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="ctSave" onclick="submitContact(${id?`'${id}'`:'null'})">${id?'Save changes':'Add contact'}</button></div>
-    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
-  document.body.appendChild(wrap);
-}
-async function submitContact(id){
-  const name=val('ct_name'); if(!name){ msg('Please add a name.','err'); return; }
-  const btn=el('ctSave'); btn.disabled=true; btn.textContent='Saving…'; msg('','');
-  const row={ client_id:CLIENT.id, name:name, role:val('ct_role')||null, phone:val('ct_phone')||null, email:val('ct_email')||null, is_primary:el('ct_primary').checked, notes:val('ct_notes')||null };
-  const res=id?await sb.from('crm_contacts').update(row).eq('id',id):await sb.from('crm_contacts').insert(row);
-  if(res.error){ btn.disabled=false; btn.textContent=id?'Save changes':'Add contact'; msg('Could not save: '+res.error.message,'err'); return; }
-  msg('✓ Saved.','ok'); await loadClientData(); setTimeout(()=>{ closeForm(); go('crm'); },500);
-}
-async function deleteContact(id){
-  if(!confirm('Delete this contact?')) return;
-  const {error}=await sb.from('crm_contacts').delete().eq('id',id);
-  if(error){ alert('Could not delete: '+error.message); return; }
-  await loadClientData(); closeForm(); go('crm');
-}
-/* --- engagement log --- */
-function openInteractionForm(){
-  const typeOpts=INTERACTION_TYPES.map(t=>`<option>${t}</option>`).join('');
-  const contactOpts=`<option value="">— general / no specific contact —</option>`+(DATA.crmContacts||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
-  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal"><div class="modal-h"><h3>Log Engagement</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
-    <div class="modal-b">
-      ${engineerDatalist()}
-      <div class="frow">
-        <div class="fld"><label>Type</label><select id="in_type">${typeOpts}</select></div>
-        <div class="fld"><label>Date</label><input id="in_date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
-      </div>
-      <div class="frow">
-        <div class="fld"><label>Contact</label><select id="in_contact">${contactOpts}</select></div>
-        <div class="fld"><label>Logged by</label><input id="in_by" list="engList" value="${esc(PROFILE.full_name||PROFILE.email||'')}"></div>
-      </div>
-      <div class="fld"><label>Summary <span class="req">*</span></label><textarea id="in_summary" placeholder="What was discussed / agreed / actioned"></textarea></div>
-    </div>
-    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="inSave" onclick="submitInteraction()">Save</button></div>
-    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
-  document.body.appendChild(wrap);
-}
-async function submitInteraction(){
-  if(!val('in_summary')){ msg('Please add a short summary.','err'); return; }
-  const btn=el('inSave'); btn.disabled=true; btn.textContent='Saving…'; msg('','');
-  const row={ client_id:CLIENT.id, contact_id:val('in_contact')||null, itype:val('in_type'), summary:val('in_summary'), occurred_at:val('in_date')||new Date().toISOString().slice(0,10), logged_by:val('in_by')||null };
-  const {error}=await sb.from('crm_interactions').insert(row);
-  if(error){ btn.disabled=false; btn.textContent='Save'; msg('Could not save: '+error.message,'err'); return; }
-  msg('✓ Logged.','ok'); await loadClientData(); setTimeout(()=>{ closeForm(); go('crm'); },500);
-}
-async function deleteInteraction(id){
-  if(!confirm('Delete this log entry?')) return;
-  const {error}=await sb.from('crm_interactions').delete().eq('id',id);
-  if(error){ alert('Could not delete: '+error.message); return; }
-  await loadClientData(); go('crm');
-}
-/* --- opportunities --- */
-function openOppForm(id){
-  const o=id?((DATA.crmOpps||[]).find(x=>x.id===id)||{}):{};
-  const stageOpts=OPP_STAGES.map(s=>`<option ${(o.stage||'Lead')===s?'selected':''}>${s}</option>`).join('');
-  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal"><div class="modal-h"><h3>${id?'Edit Opportunity':'Add Opportunity'}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
-    <div class="modal-b">
-      <div class="fld"><label>Title <span class="req">*</span></label><input id="op_title" value="${esc(o.title||'')}" placeholder="e.g. Chiller replacement — Phase 2"></div>
-      <div class="frow">
-        <div class="fld"><label>Estimated value (£)</label><input id="op_value" type="number" min="0" step="100" value="${o.value!=null?o.value:''}"></div>
-        <div class="fld"><label>Stage</label><select id="op_stage">${stageOpts}</select></div>
-      </div>
-      <div class="fld"><label>Expected close</label><input id="op_close" type="date" value="${o.expected_close?String(o.expected_close).slice(0,10):''}"></div>
-      <div class="fld"><label>Notes</label><textarea id="op_notes" placeholder="Scope, competition, next step">${esc(o.notes||'')}</textarea></div>
-    </div>
-    <div class="modal-foot">${id?`<button class="btn-ghost" style="color:var(--red)" onclick="deleteOpp('${id}')">Delete</button>`:''}<button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="opSave" onclick="submitOpp(${id?`'${id}'`:'null'})">${id?'Save changes':'Add opportunity'}</button></div>
-    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
-  document.body.appendChild(wrap);
-}
-async function submitOpp(id){
-  const title=val('op_title'); if(!title){ msg('Please add a title.','err'); return; }
-  const btn=el('opSave'); btn.disabled=true; btn.textContent='Saving…'; msg('','');
-  const row={ client_id:CLIENT.id, title:title, value:num('op_value'), stage:val('op_stage')||'Lead', expected_close:val('op_close')||null, notes:val('op_notes')||null };
-  const res=id?await sb.from('crm_opportunities').update(row).eq('id',id):await sb.from('crm_opportunities').insert(row);
-  if(res.error){ btn.disabled=false; btn.textContent=id?'Save changes':'Add opportunity'; msg('Could not save: '+res.error.message,'err'); return; }
-  msg('✓ Saved.','ok'); await loadClientData(); setTimeout(()=>{ closeForm(); go('crm'); },500);
-}
-async function deleteOpp(id){
-  if(!confirm('Delete this opportunity?')) return;
-  const {error}=await sb.from('crm_opportunities').delete().eq('id',id);
-  if(error){ alert('Could not delete: '+error.message); return; }
-  await loadClientData(); closeForm(); go('crm');
-}
 
+let PIPE_F={owner:'all', client:'all', q:''};
+
+
+function pipeOpen(q){ return !q.archived_at && !q.job_id && ['lead','pending','issued'].includes(q.status); }
+function pipeFiltered(){
+  const f=PIPE_F, s=f.q.trim().toLowerCase();
+  return (QUOTES||[]).filter(q=>{
+    if(f.owner==='me' && q.project_owner!==PROFILE.id) return false;
+    if(!['all','me'].includes(f.owner) && q.project_owner!==f.owner) return false;
+    if(f.client!=='all' && q.client_id!==f.client) return false;
+    if(s && ![q.quote_ref,q.lead_ref,q.title,q.contact_name,jobClientName(q.client_id)].some(v=>String(v||'').toLowerCase().includes(s))) return false;
+    return true;
+  });
+}
+function pipeSet(k,v){ PIPE_F[k]=v; const b=el('pipeBody'); if(b) b.innerHTML=pipeBodyHtml(); else go('pipeline'); }
+function pipeSum(list){
+  const by={}; list.forEach(q=>{ const c=q.currency||'GBP'; by[c]=(by[c]||0)+Number(q.total_sell||0); });
+  return Object.keys(by).sort().map(c=>jobMoney(by[c],c).replace(/\.00$/,'')).join(' · ')||'—';
+}
+function pipeCard(q){
+  const fs=followState(q.follow_up_date), due=q.follow_up_date && String(q.follow_up_date).slice(0,10)<=ymd(new Date());
+  return `<div class="card" style="padding:10px 12px;margin-bottom:8px;cursor:pointer" onclick="openQuote('${q.id}')">
+    <div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:12.5px">${esc(qRefText(q))}</b>${q.status==='lead'||!Number(q.total_sell)?'':`<span style="font-size:12.5px;font-weight:700">${jobMoney(q.total_sell,q.currency).replace(/\.00$/,'')}</span>`}</div>
+    <div style="font-size:13px;margin:3px 0">${esc(q.title)}</div>
+    <div class="muted" style="font-size:11.5px">${esc(jobClientName(q.client_id))} · ${esc(qOwnerName(q.project_owner))}</div>
+    ${q.follow_up_date?`<div style="margin-top:5px"><span class="chip ${due?'red':fs.c}" style="font-size:11px">Follow up ${esc(jobDate(q.follow_up_date))}</span></div>`:''}
+    ${q.status==='issued'&&q.valid_until?`<div class="muted" style="font-size:11px;margin-top:3px">Valid until ${jobDate(q.valid_until)}</div>`:''}</div>`;
+}
+function pipeBodyHtml(){
+  const all=pipeFiltered(), open=all.filter(pipeOpen), today=ymd(new Date());
+  const since=ymd(new Date(Date.now()-90*86400000));
+  const leads=open.filter(q=>q.status==='lead'), prep=open.filter(q=>q.status==='pending'), issued=open.filter(q=>q.status==='issued');
+  const due=open.filter(q=>q.follow_up_date && String(q.follow_up_date).slice(0,10)<=today).sort((a,b)=>String(a.follow_up_date).localeCompare(String(b.follow_up_date)));
+  const won=all.filter(q=>(q.job_id||q.status==='accepted') && String(q.converted_at||q.accepted_at||q.updated_at||'').slice(0,10)>=since);
+  const lost=all.filter(q=>q.status==='rejected' && String(q.updated_at||'').slice(0,10)>=since);
+  const decided=won.length+lost.length;
+  const col=(t,list,hint)=>`<div style="flex:1;min-width:230px"><div style="font-weight:700;margin-bottom:6px">${t} <span class="muted" style="font-weight:500">${list.length}</span></div>
+      ${list.sort((a,b)=>String(a.follow_up_date||'9999').localeCompare(String(b.follow_up_date||'9999'))).map(pipeCard).join('')||`<div class="muted" style="font-size:12.5px;padding:8px 2px">${hint}</div>`}</div>`;
+  return `<div class="grid kpis" style="margin-bottom:14px">
+      ${kpi('','🎯','Leads',leads.length,'')}
+      ${kpi('','📝','Being prepared',prep.length,'')}
+      <div class="card kpi"><div class="spark">📤</div><div class="lbl">Issued — awaiting answer</div><div class="val">${issued.length}<small style="margin-left:6px">${pipeSum(issued)}</small></div></div>
+      ${kpi(due.length?'r':'g','⏰','Follow-ups due',due.length,'')}
+      <div class="card kpi"><div class="spark">🏆</div><div class="lbl">Won · last 90 days</div><div class="val">${won.length}<small style="margin-left:6px">${decided?Math.round(won.length/decided*100)+'% win rate':''}</small></div></div></div>
+    ${due.length?`<div class="card" style="margin-bottom:14px"><h4 style="margin:0 0 8px">⏰ Follow-ups due</h4><table class="tbl"><thead><tr><th>Due</th><th>Ref</th><th>Quote</th><th>Client</th><th>Owner</th><th>Status</th><th></th></tr></thead><tbody>
+      ${due.map(q=>`<tr><td style="white-space:nowrap;color:var(--red);font-weight:700">${jobDate(q.follow_up_date)}</td><td style="white-space:nowrap">${qRef(q)}</td><td>${esc(q.title)}</td><td>${esc(jobClientName(q.client_id))}</td><td>${esc(qOwnerName(q.project_owner))}</td><td>${qStatusChip(q)}</td>
+        <td style="text-align:right"><button class="btn-ghost" style="padding:4px 9px" onclick="openQuote('${q.id}')">Open</button></td></tr>`).join('')}</tbody></table></div>`:''}
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">
+      ${col('🎯 Leads',leads,'No open leads.')}${col('📝 Being prepared',prep,'Nothing being priced.')}${col('📤 Issued',issued,'No quotes waiting for an answer.')}</div>
+    <div class="note" style="margin-top:6px">Lost in the last 90 days: ${lost.length}. Won and lost quotes stay on the Quotes page.</div>`;
+}
+function pagePipeline(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','');
+  if(QUOTES===null){ if(QUOTES_ERR) return emptyState('⚠','Could not load', esc(QUOTES_ERR)); loadQuotes(); return emptyState('⏳','Loading the pipeline…','One moment.'); }
+  if(MYPERMS!==null && !jobCan('quotes.view')) return emptyState('🔒','No access','Your staff role does not include quotes.');
+  const opt=(v,l,cur)=>`<option value="${esc(v)}" ${v===cur?'selected':''}>${esc(l)}</option>`;
+  const owners=[...new Set((QUOTES||[]).filter(pipeOpen).map(q=>q.project_owner).filter(Boolean))];
+  const clients=[...new Set((QUOTES||[]).filter(pipeOpen).map(q=>q.client_id))];
+  return `<div class="sechead"><h3>🎯 Pipeline</h3><span class="sub">Leads and quotes across all clients, with follow-ups due</span><span class="line"></span>
+      ${jobCan('quotes.create')?`<button class="addbtn" onclick="openQuote(null,true)">＋ New lead</button>`:''}<button class="btn-ghost" onclick="QUOTES=null;go('pipeline')">Refresh</button></div>
+    <div class="card fld" style="padding:12px 14px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+      <input placeholder="Search ref, title, client, contact…" value="${esc(PIPE_F.q)}" oninput="pipeSet('q',this.value)" style="flex:1;min-width:200px;width:auto">
+      <select style="width:auto" onchange="pipeSet('owner',this.value)">${opt('all','All owners',PIPE_F.owner)}${opt('me','Mine',PIPE_F.owner)}${owners.filter(o=>o!==PROFILE.id).map(o=>opt(o,qOwnerName(o),PIPE_F.owner)).join('')}</select>
+      <select style="width:auto" onchange="pipeSet('client',this.value)">${opt('all','All clients',PIPE_F.client)}${clients.map(c=>opt(c,jobClientName(c),PIPE_F.client)).join('')}</select></div>
+    <div id="pipeBody">${pipeBodyHtml()}</div>`;
+}
 /* ===================================================================
    ANALYTICS & INSIGHTS  (internal) — computed live from the data
    =================================================================== */
@@ -5098,8 +4964,8 @@ async function ntfRemove(id){
 }
 
 /* Pages that still show the client picked in the side menu (release 9) */
-const CLIENT_SCOPED_PAGES=['sites','schedule','rota','teams','callouts','shifts','installs','gallery','project','documents','notify','command','risks','crm','quotes','requests','reports','analytics','overview','completed','checkins'];
-const TITLES={hq:'HQ — Business Overview',digest:'Daily Digest',clients:'Clients',jobs:'Job Status — Mobilisation Control',completed:'Completed Works',crm:'CRM — Client Engagement',command:'Command Centre',checkins:'Site Check-ins',engineers:'Engineers — Team Register',compliance:'Compliance — Expiries & Right to Work',overview:'Programme Overview',sites:'Progress',schedule:'Schedule',rota:'Shift Rota',teams:'Teams & Routes',installs:'Install Reports',risks:'Risk Register',callouts:'Call-Out Reports',shifts:'Shift Reports',reports:'Activity Feed',gallery:'Photo Evidence',analytics:'Analytics & Insights',documents:'Documents',notify:'Email Updates',project:'Project Plan',requests:'Work Requests',quotes:'Quote Requests',quality:'Quality & Handover',suppliers:'Suppliers — Labour Partners',finance:'Profit & Margins',sup_home:'Dashboard',sup_engineers:'Engineers',sup_jobs:'Bookings',sup_timesheets:'Timesheets',sup_feedback:'Performance & Feedback',sup_docs:'Compliance & Documents'};
+const CLIENT_SCOPED_PAGES=['sites','schedule','rota','teams','callouts','shifts','installs','gallery','project','documents','notify','command','risks','quotes','requests','reports','analytics','overview','completed','checkins'];
+const TITLES={hq:'HQ — Business Overview',digest:'Daily Digest',clients:'Clients',jobs:'Job Status — Mobilisation Control',completed:'Completed Works',crm:'Pipeline',pipeline:'Pipeline',command:'Command Centre',checkins:'Site Check-ins',engineers:'Engineers — Team Register',compliance:'Compliance — Expiries & Right to Work',overview:'Programme Overview',sites:'Progress',schedule:'Schedule',rota:'Shift Rota',teams:'Teams & Routes',installs:'Install Reports',risks:'Risk Register',callouts:'Call-Out Reports',shifts:'Shift Reports',reports:'Activity Feed',gallery:'Photo Evidence',analytics:'Analytics & Insights',documents:'Documents',notify:'Email Updates',project:'Project Plan',requests:'Work Requests',quotes:'Quote Requests',quality:'Quality & Handover',suppliers:'Suppliers — Labour Partners',finance:'Profit & Margins',sup_home:'Dashboard',sup_engineers:'Engineers',sup_jobs:'Bookings',sup_timesheets:'Timesheets',sup_feedback:'Performance & Feedback',sup_docs:'Compliance & Documents'};
 function go(page){
   CURRENT=page;
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
@@ -5152,7 +5018,8 @@ function go(page){
     else if(page==='documents')html=pageDocuments();
     else if(page==='notify')html=pageNotify();
     else if(page==='project')html=pageProjectPlan();
-    else if(page==='crm')html=pageCRM();
+    else if(page==='pipeline'||page==='crm')html=pagePipeline();
+    else if(page==='clientrec')html=pageClientRec();
     else if(page==='quality')html=pageQuality();
   }catch(e){ html=emptyState('⚠','Something went wrong drawing this page',esc(e.message)); }
   el('content').innerHTML=html;
@@ -5212,7 +5079,7 @@ function jobStatusChip(s){ const x=JOB_STATUSES.find(r=>r[0]===s)||[s,s,'grey'];
 function jobMoney(v,cur){ if(v==null||v==='') return '—'; const n=Number(v); const sym=({GBP:'£',EUR:'€',USD:'$'})[cur]||(cur+' '); return (n<0?'-':'')+sym+Math.abs(n).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function jobDate(d){ if(!d) return ''; const p=String(d).slice(0,10).split('-'); return p.length===3?`${p[2]}/${p[1]}/${p[0]}`:esc(d); }
 function jobClientName(id){ const c=(CLIENTS||[]).find(x=>x.id===id); return c?c.name:'—'; }
-function jobSiteName(id){ const s=JOBREG_SITES.find(x=>x.id===id); return s?(s.code||s.name||s.city||'Site'):''; }
+function jobSiteName(id){ const s=JOBREG_SITES.find(x=>x.id===id); return s?(s.name||s.code||s.city||'Site'):''; }
 
 // Fetch every row, 1,000 at a time, so lists are never silently cut off.
 async function jobFetchAll(makeQuery){
@@ -5226,7 +5093,9 @@ async function jobFetchAll(makeQuery){
   return out;
 }
 
-async function loadJobRegister(){
+let JOBREG_P=null;
+function loadJobRegister(){ if(JOBREG_LOADING) return JOBREG_P; JOBREG_P=loadJobRegisterNow(); return JOBREG_P; }
+async function loadJobRegisterNow(){
   if(JOBREG_LOADING) return; JOBREG_LOADING=true; JOBREG_ERR=null;
   try{
     const perms = PROFILE.staff_role
@@ -5237,7 +5106,7 @@ async function loadJobRegister(){
     const [jobs, ents, sites] = await Promise.all([
       jobCan('jobs.view') ? jobFetchAll(()=>sb.from('jobs').select('*').order('created_at',{ascending:false})) : Promise.resolve([]),
       sb.from('trading_entities').select('*').order('code'),
-      jobFetchAll(()=>sb.from('sites').select('id,client_id,code,name,city,country,address').order('code'))
+      jobFetchAll(()=>sb.from('sites').select('id,client_id,code,name,city,country,address,archived_at').order('code'))
     ]);
     if(ents.error) throw ents.error;
     JOBREG=jobs; JOBREG_ENTITIES=ents.data||[]; JOBREG_SITES=sites;
@@ -5330,9 +5199,10 @@ function pageJobRegister(){
 }
 
 /* ---- create / edit ---- */
-function jobSiteOptions(clientId, selected){
-  const list=JOBREG_SITES.filter(s=>s.client_id===clientId);
-  return `<option value="">— no specific site —</option>`+list.map(s=>`<option value="${s.id}" ${s.id===selected?'selected':''}>${esc(s.code||s.name||s.city||'Site')}${s.city&&s.code!==s.city?' · '+esc(s.city):''}</option>`).join('');
+function jobSiteOptions(clientId, selected, allowNew){
+  const list=JOBREG_SITES.filter(s=>s.client_id===clientId && (!s.archived_at || s.id===selected));
+  return `<option value="">— no specific site —</option>`+list.map(s=>`<option value="${s.id}" ${s.id===selected?'selected':''}>${esc(s.name||s.code||s.city||'Site')}${s.code&&s.name?' ('+esc(s.code)+')':''}${s.city&&s.name!==s.city?' · '+esc(s.city):''}</option>`).join('')
+    +(allowNew&&clientId?`<option value="__new">＋ New site…</option>`:'');
 }
 function jobEntityChanged(){
   const code=el('jb_entity').value; const e=JOBREG_ENTITIES.find(x=>x.code===code);
@@ -5556,7 +5426,9 @@ function qUnitSell(l){
   return qRound(qNum(l.unit_sell));
 }
 
-async function loadQuotes(){
+let QUOTES_P=null;
+function loadQuotes(){ if(QUOTES_LOADING) return QUOTES_P; QUOTES_P=loadQuotesNow(); return QUOTES_P; }
+async function loadQuotesNow(){
   if(QUOTES_LOADING) return; QUOTES_LOADING=true; QUOTES_ERR=null;
   try{
     if(MYPERMS===null){
@@ -5566,7 +5438,7 @@ async function loadQuotes(){
     const [qs, ents, sites, codes] = await Promise.all([
       jobCan('quotes.view') ? jobFetchAll(()=>sb.from('quotes').select('*').order('created_at',{ascending:false})) : Promise.resolve([]),
       sb.from('trading_entities').select('*').order('code'),
-      jobFetchAll(()=>sb.from('sites').select('id,client_id,code,name,city,country,address').order('code')),
+      jobFetchAll(()=>sb.from('sites').select('id,client_id,code,name,city,country,address,archived_at').order('code')),
       sb.from('cost_codes').select('*').eq('active',true).order('sort_order')
     ]);
     if(ents.error) throw ents.error; if(codes.error) throw codes.error;
@@ -5574,7 +5446,7 @@ async function loadQuotes(){
     if(!LOGINS || !LOGINS.length){ try{ await loadLogins(); }catch(e){} }
   }catch(e){ QUOTES_ERR=e.message||String(e); QUOTES=QUOTES||[]; }
   QUOTES_LOADING=false;
-  if(CURRENT==='quotereg') go('quotereg');
+  if(CURRENT==='quotereg'||CURRENT==='pipeline') go(CURRENT);
 }
 
 function quoteFiltered(){
@@ -5640,6 +5512,7 @@ function pageQuoteRegister(){
 
 /* ---------- the quote editor ---------- */
 async function openQuote(id, asLead, preset){
+  try{ await qLoadContacts(); }catch(e){ console.warn('contacts',e); }
   if(!id){
     const base=asLead?{status:'lead',revision:1,follow_up_date:qAddDays(7)}:{status:'pending',revision:1,valid_until:qAddDays(30),terms:Q_DEFAULT_TERMS};
     QEDIT={q:{...base, project_owner:PROFILE.id, ...(preset&&preset.q||{})}, lines:[], versions:[], atts:[], fromRequest:preset&&preset.request||null};
@@ -5750,12 +5623,14 @@ function renderQuoteModal(){
         <div class="fld"><label>Trading company <span class="req">*</span></label>${isNew
           ? `<select id="qe_entity" onchange="qEntityChanged()"><option value="">— choose —</option>${JOBREG_ENTITIES.filter(e=>e.active).map(e=>`<option value="${e.code}" ${e.code===q.entity_code?'selected':''}>${esc(e.code+' — '+e.legal_name)}</option>`).join('')}</select>`
           : `<input value="${esc(q.entity_code+' — '+(ent?ent.legal_name:''))} · ${esc(cur)}" disabled>`}</div>
-        <div class="fld"><label>Client <span class="req">*</span></label><select id="qe_client" ${dis} onchange="el('qe_site').innerHTML=jobSiteOptions(this.value,'')"><option value="">— choose —</option>${(CLIENTS||[]).map(c=>`<option value="${c.id}" ${c.id===q.client_id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
+        <div class="fld"><label>Client <span class="req">*</span></label><select id="qe_client" ${dis} onchange="qClientChanged()"><option value="">— choose —</option>${(CLIENTS||[]).filter(c=>!c.archived_at||c.id===q.client_id).map(c=>`<option value="${c.id}" ${c.id===q.client_id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
       </div>
       <div class="frow">
         <div class="fld"><label>Quote title <span class="req">*</span></label><input id="qe_title" ${dis} value="${esc(q.title||'')}" placeholder="e.g. Conveyor install, line 3"></div>
-        <div class="fld"><label>Site</label><select id="qe_site" ${dis}>${jobSiteOptions(q.client_id,q.site_id)}</select></div>
+        <div class="fld"><label>Site</label><select id="qe_site" ${dis} onchange="qSiteChanged(this)">${jobSiteOptions(q.client_id,q.site_id,!dis)}</select></div>
       </div>
+      <div id="qeNewSite" class="card" style="display:none;padding:10px 12px;margin-bottom:10px;border-style:dashed"><div style="font-weight:700;margin-bottom:6px">New site for this client</div>${clSiteFields({},'qs')}<button class="btn-ghost" onclick="qAddSite()">＋ Add site</button></div>
+      ${dis?'':`<div class="fld"><label>Pick a contact <span class="muted" style="font-weight:500">(the site’s contacts and head office)</span></label><select id="qe_cpick" onchange="qPickContact(this.value)">${qContactOptions(q.client_id,q.site_id)}</select></div>`}
       <div class="frow">
         <div class="fld"><label>Client contact</label><input id="qe_cname" ${dis} value="${esc(q.contact_name||'')}" placeholder="Name"></div>
         <div class="fld"><label>Contact email</label><input id="qe_cemail" ${dis} type="email" value="${esc(q.contact_email||'')}"></div>
@@ -8125,6 +8000,550 @@ function pageSupplierInvoices(){
       <label style="font-size:12.5px">From <input type="date" style="width:auto" value="${esc(SINV_F.from)}" onchange="siSet('from',this.value)"></label>
       <label style="font-size:12.5px">To <input type="date" style="width:auto" value="${esc(SINV_F.to)}" onchange="siSet('to',this.value)"></label></div>
     <div class="card" id="siTable">${siTableHtml()}</div>`;
+}
+/* ===================================================================
+   CLIENTS  —  release 13 (build release 5).
+   Client list and client record page: details and relationship,
+   commercial details, sites, contacts per site, quotes, jobs, reports,
+   activity, portal logins and rates. Clients are archived, not deleted.
+   =================================================================== */
+
+let CLX=null, CLX_ERR=null, CLX_LOADING=false;
+let CL_F={status:'current', q:''};
+let CREC={id:null, tab:'details', d:null, err:null, showArchivedSites:false};
+TITLES.clientrec='Client';
+
+const CL_STATUS=[['prospect','Prospect','cyan'],['active','Active','green'],['dormant','Dormant','grey']];
+const CREC_TABS=[['details','Details'],['sites','Sites'],['contacts','Contacts'],['quotes','Quotes'],['jobs','Jobs'],['reports','Reports'],['activity','Activity'],['logins','Portal logins'],['rates','Rates']];
+
+function activeClients(){ return (CLIENTS||[]).filter(c=>!c.archived_at); }
+function clStatusChip(a){
+  if(!a) return '<span class="muted">—</span>';
+  const x=CL_STATUS.find(r=>r[0]===a.client_status)||[a.client_status,a.client_status,'grey'];
+  return `<span class="chip ${x[2]}">${esc(x[1])}</span>${a.key_account?' <span class="chip amber">Key account</span>':''}`;
+}
+async function clPerms(){
+  if(MYPERMS!==null) return;
+  const perms = PROFILE.staff_role ? await sb.from('role_permissions').select('permission_code').eq('role_code', PROFILE.staff_role) : {data:[]};
+  if(perms.error) throw perms.error; MYPERMS=(perms.data||[]).map(r=>r.permission_code);
+}
+function clCanEdit(){ return jobCan('quotes.create')||jobCan('jobs.edit'); }
+
+/* ---------------- list ---------------- */
+async function loadClientsList(){
+  if(CLX_LOADING) return; CLX_LOADING=true; CLX_ERR=null;
+  try{
+    await clPerms();
+    const [acc, sites, qs, jobs, ents] = await Promise.all([
+      jobFetchAll(()=>sb.from('client_accounts').select('*')),
+      jobFetchAll(()=>sb.from('sites').select('id,client_id,archived_at')),
+      jobCan('quotes.view') ? jobFetchAll(()=>sb.from('quotes').select('id,client_id,status,job_id,archived_at')) : Promise.resolve([]),
+      jobCan('jobs.view') ? jobFetchAll(()=>sb.from('jobs').select('id,client_id,status,archived_at')) : Promise.resolve([]),
+      sb.from('trading_entities').select('*').order('code')]);
+    if(!ents.error && ents.data) JOBREG_ENTITIES=ents.data;
+    await refreshClients(); await loadLogins();
+    CLX={acc:Object.fromEntries(acc.map(a=>[a.client_id,a])), sites, quotes:qs, jobs};
+  }catch(e){ CLX_ERR=e.message||String(e); CLX=null; }
+  CLX_LOADING=false;
+  if(CURRENT==='clients') go('clients');
+}
+function clReload(){ CLX=null; if(CURRENT==='clients') go('clients'); }
+function clStats(id){
+  const openQ=CLX.quotes.filter(q=>q.client_id===id && !q.archived_at && !q.job_id && ['lead','pending','issued'].includes(q.status)).length;
+  const liveJ=CLX.jobs.filter(j=>j.client_id===id && !j.archived_at && JOB_OPEN.includes(j.status)).length;
+  const sites=CLX.sites.filter(s=>s.client_id===id && !s.archived_at).length;
+  const logins=(LOGINS||[]).filter(l=>l.client_id===id).length;
+  return {openQ, liveJ, sites, logins};
+}
+function clFiltered(){
+  const f=CL_F, q=f.q.trim().toLowerCase();
+  return (CLIENTS||[]).filter(c=>{
+    const a=CLX.acc[c.id]||{};
+    if(f.status==='archived') { if(!c.archived_at) return false; }
+    else if(f.status!=='all' && c.archived_at) return false;
+    if(['prospect','active','dormant'].includes(f.status) && a.client_status!==f.status) return false;
+    if(f.status==='key' && !a.key_account) return false;
+    if(q && ![c.name, c.programme_title, c.slug, a.accounts_contact, a.vat_number].some(v=>String(v||'').toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+function clSet(k,v){ CL_F[k]=v; const t=el('clTable'); if(t) t.innerHTML=clTableHtml(); else go('clients'); }
+function clTableHtml(){
+  const rows=clFiltered();
+  if(!rows.length) return `<div class="empty" style="padding:24px"><div class="big">🗂</div><b>No clients match</b></div>`;
+  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Client</th><th>Status</th><th>Trading co.</th><th style="text-align:right">Sites</th><th style="text-align:right">Open quotes &amp; leads</th><th style="text-align:right">Live jobs</th><th>Portal logins</th><th></th></tr></thead><tbody>${
+    rows.map(c=>{ const a=CLX.acc[c.id], s=clStats(c.id);
+      return `<tr${c.archived_at?' style="opacity:.6"':''}><td><span class="tdot" style="background:${esc(c.brand_color||'#38bdf8')};display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px"></span><b>${esc(c.name)}</b>${c.programme_title?`<div class="muted" style="font-size:11.5px">${esc(c.programme_title)}</div>`:''}</td>
+        <td>${c.archived_at?'<span class="chip grey">Archived</span>':clStatusChip(a)}</td><td>${esc((a&&a.entity_code)||'—')}</td>
+        <td style="text-align:right">${s.sites}</td><td style="text-align:right">${s.openQ||'—'}</td><td style="text-align:right">${s.liveJ||'—'}</td>
+        <td>${s.logins?`<span class="chip green">${s.logins}</span>`:'<span class="muted">none</span>'}</td>
+        <td style="text-align:right;white-space:nowrap"><button class="btn-ghost" style="padding:4px 10px" onclick="openClientRecord('${c.id}')">Open</button></td></tr>`; }).join('')}</tbody></table></div>`;
+}
+function pageClients(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','');
+  if(CLX===null){ if(CLX_ERR) return emptyState('⚠','Could not load clients', esc(CLX_ERR)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="CLX_ERR=null;clReload()">Try again</button></div>`); loadClientsList(); return emptyState('⏳','Loading clients…','One moment.'); }
+  const cur=(CLIENTS||[]).filter(c=>!c.archived_at), A=c=>CLX.acc[c.id]||{};
+  const opt=(v,l)=>`<option value="${v}" ${CL_F.status===v?'selected':''}>${l}</option>`;
+  const openQ=CLX.quotes.filter(q=>!q.archived_at && !q.job_id && ['lead','pending','issued'].includes(q.status)).length;
+  const liveJ=CLX.jobs.filter(j=>!j.archived_at && JOB_OPEN.includes(j.status)).length;
+  return `<div class="sechead"><h3>🗂 Clients</h3><span class="sub">Open a client for its details, sites, contacts, quotes, jobs and rates</span><span class="line"></span>
+      ${clCanEdit()?`<button class="addbtn" onclick="clNewForm()">＋ Add client</button>`:''}<button class="btn-ghost" onclick="clReload()">Refresh</button></div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${kpi('g','🏢','Active clients',cur.filter(c=>A(c).client_status==='active').length,'')}
+      ${kpi('','🎯','Prospects',cur.filter(c=>A(c).client_status==='prospect').length,'')}
+      ${kpi('','📝','Open quotes & leads',openQ,'')}
+      ${kpi('','📋','Open jobs',liveJ,'')}</div>
+    <div class="card fld" style="padding:12px 14px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+      <input placeholder="Search client, programme, accounts contact, VAT no…" value="${esc(CL_F.q)}" oninput="clSet('q',this.value)" style="flex:1;min-width:200px;width:auto">
+      <select style="width:auto" onchange="clSet('status',this.value)">${opt('current','All current')}${opt('active','Active')}${opt('prospect','Prospects')}${opt('dormant','Dormant')}${opt('key','Key accounts')}${opt('archived','Archived')}${opt('all','Everything')}</select></div>
+    <div class="card" id="clTable">${clTableHtml()}</div>
+    <div class="note" style="margin-top:12px">A client doesn’t need a portal login. A login only lets someone at the client sign in to see their pages.</div>`;
+}
+function clEntityOptions(sel){ return JOBREG_ENTITIES.filter(e=>e.active||e.code===sel).map(e=>`<option value="${e.code}" ${e.code===sel?'selected':''}>${esc(e.code+' — '+e.legal_name)}</option>`).join(''); }
+function clNewForm(){
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:560px"><div class="modal-h"><h3>Add client</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div class="fld"><label>Client name <span class="req">*</span></label><input id="cn_name" placeholder="e.g. Boplan UK"></div>
+      <div class="frow">
+        <div class="fld"><label>Status</label><select id="cn_status"><option value="prospect">Prospect — quoting, not yet worked for</option><option value="active">Active</option></select></div>
+        <div class="fld"><label>Trading company</label><select id="cn_ent">${clEntityOptions('UK')}</select></div></div>
+      <div class="note">You can add the commercial details, sites and contacts on the client’s page next.</div>
+    </div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="cnSave" onclick="clNewSave()">Add client</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function clNewSave(){
+  const name=val('cn_name').trim(); if(!name) return msg('Enter the client name.','err');
+  const b=el('cnSave'); b.disabled=true;
+  let slug=slugify(name)||('client-'+Date.now());
+  if((CLIENTS||[]).some(c=>c.slug===slug)) slug=slug+'-'+String(Date.now()).slice(-4);
+  const r=await sb.from('clients').insert({name, slug, brand_color:'#38bdf8', is_active:true}).select().single();
+  if(r.error){ b.disabled=false; return msg('Not saved: '+r.error.message,'err'); }
+  const u=await sb.from('client_accounts').update({client_status:val('cn_status'), entity_code:val('cn_ent')||'UK'}).eq('client_id',r.data.id);
+  if(u.error){ b.disabled=false; return msg('Client added, but its status was not saved: '+u.error.message,'err'); }
+  closeForm(); await refreshClients(); CLX=null; renderShell(); openClientRecord(r.data.id);
+}
+
+/* ---------------- record page ---------------- */
+async function openClientRecord(id, tab){
+  CREC={id, tab:tab||'details', d:null, err:null, showArchivedSites:false};
+  go('clientrec'); await clLoadRec();
+}
+async function clLoadRec(){
+  const id=CREC.id;
+  try{
+    await clPerms();
+    if(JOBREG===null) await loadJobRegister();
+    if(QUOTES===null && jobCan('quotes.view')) await loadQuotes();
+    if(!LOGINS||!LOGINS.length) await loadLogins();
+    const [acc, sites, contacts, links, acts, xero, co, sh, pr] = await Promise.all([
+      sb.from('client_accounts').select('*').eq('client_id',id).maybeSingle(),
+      sb.from('sites').select('*').eq('client_id',id).order('code'),
+      sb.from('crm_contacts').select('*').eq('client_id',id).order('name'),
+      sb.from('crm_contact_sites').select('contact_id,site_id'),
+      sb.from('crm_interactions').select('*').eq('client_id',id).order('occurred_at',{ascending:false}).limit(300),
+      sb.from('xero_contact_links').select('*').eq('party_type','client').eq('party_id',id),
+      sb.from('callout_reports').select('*').eq('client_id',id).order('submitted_at',{ascending:false}).limit(100),
+      sb.from('shift_reports').select('*').eq('client_id',id).order('submitted_at',{ascending:false}).limit(100),
+      sb.from('progress_reports').select('*').eq('client_id',id).order('submitted_at',{ascending:false}).limit(100)]);
+    for(const r of [acc,sites,contacts]) if(r.error) throw r.error;
+    const ids=new Set((contacts.data||[]).map(c=>c.id));
+    CREC.d={acc:acc.data||{client_id:id}, sites:sites.data||[], contacts:contacts.data||[], links:(links.data||[]).filter(l=>ids.has(l.contact_id)),
+      acts:acts.data||[], xero:xero.data||[], reports:{co:co.data||[], sh:sh.data||[], pr:pr.data||[]}};
+    // keep the shared site list fresh for quotes and jobs
+    (CREC.d.sites).forEach(s=>{ const i=JOBREG_SITES.findIndex(x=>x.id===s.id); if(i>=0) JOBREG_SITES[i]={...JOBREG_SITES[i],...s}; else JOBREG_SITES.push(s); });
+  }catch(e){ CREC.err=e.message||String(e); }
+  if(CURRENT==='clientrec') go('clientrec');
+}
+function clRec(){ return (CLIENTS||[]).find(c=>c.id===CREC.id)||null; }
+function clTab(t){ CREC.tab=t; document.querySelectorAll('#crecTabs .jtab').forEach(b=>b.classList.toggle('on',b.dataset.t===t)); const p=el('crecPane'); if(p) p.innerHTML=clPaneHtml(); }
+function pageClientRec(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','');
+  const c=clRec(); if(!c) return emptyState('🗂','Client not found',`<button class="btn-ghost" onclick="go('clients')">Back to Clients</button>`);
+  if(CREC.err) return emptyState('⚠','Could not load the client', esc(CREC.err)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="CREC.err=null;clLoadRec()">Try again</button></div>`);
+  if(!CREC.d) return emptyState('⏳','Loading '+esc(c.name)+'…','One moment.');
+  const a=CREC.d.acc;
+  return `<div class="sechead"><button class="btn-ghost" style="padding:4px 10px" onclick="go('clients')">← Clients</button>
+      <h3 style="margin-left:6px"><span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${esc(c.brand_color||'#38bdf8')};margin-right:7px"></span>${esc(c.name)}</h3>
+      <span class="sub">${c.archived_at?'<span class="chip grey">Archived</span>':clStatusChip(a)} ${a.entity_code?`<span class="chip">${esc(a.entity_code)}</span>`:''}</span><span class="line"></span>
+      ${c.archived_at?'':`<button class="btn-ghost" onclick="enterClient('${c.id}')">Client pages →</button><button class="btn-ghost" onclick="viewAsClient('${c.id}')">👁 View as client</button>`}
+      ${c.archived_at?(jobCan('records.restore')?`<button class="btn-ghost" onclick="clRestore()">Restore</button>`:''):(clCanEdit()?`<button class="btn-ghost" style="color:var(--red)" onclick="clArchive()">Archive</button>`:'')}</div>
+    ${c.archived_at?`<div class="card" style="margin-bottom:12px;border-color:var(--line2)"><b>Archived</b> ${jobDate(String(c.archived_at).slice(0,10))} — ${esc(c.archive_reason||'')}. It no longer appears in the pickers; its history is kept.</div>`:''}
+    <div class="jtabs" id="crecTabs" style="margin-bottom:12px">${CREC_TABS.map(([k,l])=>`<button class="jtab ${CREC.tab===k?'on':''}" data-t="${k}" onclick="clTab('${k}')">${l}${clTabCount(k)}</button>`).join('')}</div>
+    <div id="crecPane">${clPaneHtml()}</div>`;
+}
+function clTabCount(k){
+  const d=CREC.d, n=(x)=>x?` <span class="muted" style="font-weight:500">${x}</span>`:'';
+  if(k==='sites') return n(d.sites.filter(s=>!s.archived_at).length);
+  if(k==='contacts') return n(d.contacts.filter(s=>!s.archived_at).length);
+  if(k==='quotes') return n(clQuotes().filter(q=>!q.archived_at).length);
+  if(k==='jobs') return n(clJobs().filter(j=>!j.archived_at).length);
+  if(k==='logins') return n((LOGINS||[]).filter(l=>l.client_id===CREC.id).length);
+  return '';
+}
+function clPaneHtml(){
+  try{
+    switch(CREC.tab){
+      case 'details': return clDetailsHtml();
+      case 'sites': return clSitesHtml();
+      case 'contacts': return clContactsHtml();
+      case 'quotes': return clQuotesHtml();
+      case 'jobs': return clJobsHtml();
+      case 'reports': return clReportsHtml();
+      case 'activity': return clActivityHtml();
+      case 'logins': return clLoginsHtml();
+      case 'rates': return clRatesHtml();
+    }
+  }catch(e){ return `<div class="card">Could not draw this tab: ${esc(e.message)}</div>`; }
+  return '';
+}
+function clLocked(){ const c=clRec(); return !!(c&&c.archived_at); }
+
+/* --- Details: relationship and commercial --- */
+function clDetailsHtml(){
+  const a=CREC.d.acc, c=clRec(), ed=clCanEdit() && !clLocked(), dis=ed?'':'disabled';
+  const x=CREC.d.xero.filter(l=>l.xero_contact_id||l.xero_contact_name);
+  const fs=followState(a.next_follow_up);
+  return `<div class="row2">
+    <div class="card"><h4 style="margin:0 0 10px">Relationship</h4>
+      <div class="frow"><div class="fld"><label>Status</label><select id="ca_status" ${dis}>${CL_STATUS.map(s=>`<option value="${s[0]}" ${a.client_status===s[0]?'selected':''}>${s[1]}</option>`).join('')}</select></div>
+        <div class="fld"><label>&nbsp;</label><label style="display:flex;gap:7px;align-items:center;font-size:13px"><input type="checkbox" id="ca_key" ${a.key_account?'checked':''} ${dis} style="width:auto"> Key account</label></div></div>
+      <div class="frow"><div class="fld"><label>Account owner</label><select id="ca_owner" ${dis}>${qOwnerOptions(a.account_owner)}</select></div>
+        <div class="fld"><label>Next follow-up ${a.next_follow_up&&fs.label?`<span class="chip ${fs.c}" style="margin-left:4px">${esc(fs.label)}</span>`:''}</label><input type="date" id="ca_follow" ${dis} value="${esc(String(a.next_follow_up||'').slice(0,10))}"></div></div>
+      <div class="fld"><label>Relationship notes (internal)</label><textarea id="ca_notes" ${dis} rows="4">${esc(a.relationship_notes||'')}</textarea></div>
+    </div>
+    <div class="card"><h4 style="margin:0 0 10px">Commercial details <span class="muted" style="font-weight:500;font-size:12px">· never shown to the client</span></h4>
+      <div class="frow"><div class="fld"><label>Trading company</label><select id="ca_ent" ${dis}>${clEntityOptions(a.entity_code)}</select></div>
+        <div class="fld"><label>Payment terms (days)</label><input type="number" min="0" max="365" id="ca_terms" ${dis} value="${a.payment_terms_days??''}" placeholder="e.g. 30"></div></div>
+      <div class="fld"><label>Billing address</label><textarea id="ca_bill" ${dis} rows="3">${esc(a.billing_address||'')}</textarea></div>
+      <div class="frow"><div class="fld"><label>Accounts contact</label><input id="ca_acc" ${dis} value="${esc(a.accounts_contact||'')}"></div>
+        <div class="fld"><label>Accounts email</label><input id="ca_accem" type="email" ${dis} value="${esc(a.accounts_email||'')}"></div></div>
+      <div class="frow"><div class="fld"><label>VAT number</label><input id="ca_vat" ${dis} value="${esc(a.vat_number||'')}"></div>
+        <div class="fld"><label>&nbsp;</label><label style="display:flex;gap:7px;align-items:center;font-size:13px"><input type="checkbox" id="ca_po" ${a.po_required?'checked':''} ${dis} style="width:auto"> Client needs a PO before we start</label></div></div>
+      <div class="note" style="margin-top:4px">Xero contact: ${x.length?x.map(l=>`<b>${esc(l.xero_contact_name||l.xero_contact_id)}</b> (${esc(l.entity_code)})`).join(', '):'not linked yet'}. Once Xero is connected, Xero will hold the billing details and they will show here read-only.</div>
+    </div></div>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
+      ${ed?`<button class="btn" id="caSave" style="width:auto" onclick="clSaveDetails()">Save details</button>`:''}
+      ${PROFILE.role==='admin'&&!clLocked()?`<button class="btn-ghost" onclick="openClientForm('${c.id}')">Name, logo &amp; portal branding</button>`:''}
+      <span class="savemsg" id="caMsg"></span></div>`;
+}
+function clSay(id,t,cls){ const m=el(id); if(m){ m.textContent=t; m.className='savemsg '+(cls||''); } }
+async function clSaveDetails(){
+  const v=k=>{ const e=el(k); return e?e.value.trim():''; };
+  const terms=v('ca_terms');
+  const patch={client_status:v('ca_status'), key_account:el('ca_key').checked, account_owner:v('ca_owner')||null, next_follow_up:v('ca_follow')||null,
+    relationship_notes:v('ca_notes')||null, entity_code:v('ca_ent')||null, payment_terms_days:terms===''?null:Number(terms), billing_address:v('ca_bill')||null,
+    accounts_contact:v('ca_acc')||null, accounts_email:v('ca_accem')||null, vat_number:v('ca_vat')||null, po_required:el('ca_po').checked};
+  const b=el('caSave'); b.disabled=true;
+  let r=await sb.from('client_accounts').update(patch).eq('client_id',CREC.id).select();
+  if(!r.error && !(r.data||[]).length) r=await sb.from('client_accounts').insert({client_id:CREC.id, ...patch}).select();
+  if(!r.error) r={data:(r.data||[])[0]||null, error:r.data&&r.data.length?null:{message:'you may not have permission'}};
+  b.disabled=false;
+  if(r.error) return clSay('caMsg','Not saved: '+r.error.message,'err');
+  CREC.d.acc=r.data; if(CLX) CLX.acc[CREC.id]=r.data;
+  clSay('caMsg','✓ Saved.','ok');
+}
+async function clArchive(){
+  const c=clRec(); const reason=prompt(`Archive ${c.name}?\n\nIt drops out of the pickers and lists; all its history is kept. Give a reason:`);
+  if(reason===null) return; if(!reason.trim()) return alert('A reason is needed.');
+  const r=await sb.from('clients').update({archived_at:new Date().toISOString(), archive_reason:reason.trim()}).eq('id',c.id).select();
+  if(r.error) return alert('Not archived: '+r.error.message);
+  if(CLIENT&&CLIENT.id===c.id) CLIENT=activeClients().find(x=>x.id!==c.id)||CLIENT;
+  await refreshClients(); CLX=null; renderShell(); go('clientrec');
+}
+async function clRestore(){
+  if(!confirm('Restore this client to the lists and pickers?')) return;
+  const r=await sb.from('clients').update({archived_at:null}).eq('id',CREC.id).select();
+  if(r.error) return alert('Not restored: '+r.error.message);
+  await refreshClients(); CLX=null; renderShell(); go('clientrec');
+}
+
+/* --- Sites --- */
+function clSiteName(s){ return s.name||s.code||s.city||'Site'; }
+function clSitesHtml(){
+  const d=CREC.d, ed=PROFILE.role==='admin' && !clLocked();
+  const list=d.sites.filter(s=>CREC.showArchivedSites||!s.archived_at);
+  const jobsAt=id=>clJobs().filter(j=>j.site_id===id && !j.archived_at).length, qAt=id=>clQuotes().filter(q=>q.site_id===id && !q.archived_at).length;
+  const cAt=id=>d.links.filter(l=>l.site_id===id).length;
+  return `<div class="sechead" style="margin:0 0 8px"><h4 style="margin:0">Sites</h4><span class="sub">A job is always on one site; a site can have several jobs</span><span class="line"></span>
+      <label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" style="width:auto" ${CREC.showArchivedSites?'checked':''} onchange="CREC.showArchivedSites=this.checked;clTab('sites')"> Show archived</label>
+      ${ed?`<button class="addbtn" onclick="clSiteForm()">＋ Add site</button>`:''}</div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Site</th><th>Address</th><th style="text-align:right">Jobs</th><th style="text-align:right">Quotes</th><th style="text-align:right">Contacts</th><th></th></tr></thead><tbody>
+    ${list.map(s=>`<tr${s.archived_at?' style="opacity:.55"':''}><td><b>${esc(clSiteName(s))}</b>${s.code&&s.name?`<div class="muted" style="font-size:11.5px">${esc(s.code)}</div>`:''}${s.archived_at?`<div class="muted" style="font-size:11.5px">Archived — ${esc(s.archive_reason||'')}</div>`:''}</td>
+      <td style="font-size:12.5px">${esc([s.address,s.city,s.country].filter(Boolean).join(', ')||'—')}</td>
+      <td style="text-align:right">${jobsAt(s.id)||'—'}</td><td style="text-align:right">${qAt(s.id)||'—'}</td><td style="text-align:right">${cAt(s.id)||'—'}</td>
+      <td style="text-align:right;white-space:nowrap">${ed?(s.archived_at?`<button class="btn-ghost" style="padding:4px 9px" onclick="clSiteRestore('${s.id}')">Restore</button>`:`<button class="btn-ghost" style="padding:4px 9px" onclick="clSiteForm('${s.id}')">Edit</button> <button class="btn-ghost" style="padding:4px 9px" onclick="clSiteArchive('${s.id}')">Archive</button>`):''}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="muted" style="padding:12px">No sites yet. Add one here, or create it on a quote.</td></tr>'}
+    </tbody></table></div>`;
+}
+function clSiteFields(s, p){
+  s=s||{}; p=p||'cs';
+  return `<div class="frow"><div class="fld"><label>Site name <span class="req">*</span></label><input id="${p}_name" value="${esc(s.name||'')}" placeholder="e.g. Daventry DC"></div>
+      <div class="fld"><label>Site code</label><input id="${p}_code" value="${esc(s.code||'')}" placeholder="e.g. DAV1 (optional)"></div></div>
+    <div class="fld"><label>Address</label><input id="${p}_addr" value="${esc(s.address||'')}"></div>
+    <div class="frow"><div class="fld"><label>Town / city</label><input id="${p}_city" value="${esc(s.city||'')}"></div>
+      <div class="fld"><label>Country</label><input id="${p}_country" value="${esc(s.country||'')}" placeholder="e.g. UK"></div></div>`;
+}
+function clSiteRow(p){ const v=k=>{ const e=el(p+'_'+k); return e?e.value.trim():''; }; return {name:v('name'), code:v('code')||null, address:v('addr')||null, city:v('city')||null, country:v('country')||null}; }
+function clSiteForm(id){
+  const s=id?CREC.d.sites.find(x=>x.id===id):null;
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:560px"><div class="modal-h"><h3>${s?'Edit site':'Add site'}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">${clSiteFields(s,'cs')}</div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="csSave" onclick="clSiteSave(${s?`'${s.id}'`:'null'})">${s?'Save':'Add site'}</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function clSiteSave(id){
+  const row=clSiteRow('cs'); if(!row.name) return msg('Give the site a name.','err');
+  el('csSave').disabled=true;
+  const r=id?await sb.from('sites').update(row).eq('id',id).select().single():await sb.from('sites').insert({...row, client_id:CREC.id}).select().single();
+  if(r.error){ el('csSave').disabled=false; return msg('Not saved: '+r.error.message,'err'); }
+  closeForm(); await clLoadRec(); CREC.tab='sites'; if(CURRENT==='clientrec') go('clientrec');
+}
+async function clSiteArchive(id){
+  const reason=prompt('Archive this site? It drops out of the site lists; its jobs and history stay. Give a reason:');
+  if(reason===null) return; if(!reason.trim()) return alert('A reason is needed.');
+  const r=await sb.from('sites').update({archived_at:new Date().toISOString(), archive_reason:reason.trim()}).eq('id',id).select();
+  if(r.error) return alert('Not archived: '+r.error.message);
+  await clLoadRec();
+}
+async function clSiteRestore(id){
+  const r=await sb.from('sites').update({archived_at:null}).eq('id',id).select();
+  if(r.error) return alert('Not restored: '+r.error.message);
+  await clLoadRec();
+}
+
+/* --- Contacts per site --- */
+function clContactWhere(c){
+  const sites=CREC.d.links.filter(l=>l.contact_id===c.id).map(l=>CREC.d.sites.find(s=>s.id===l.site_id)).filter(Boolean).map(clSiteName);
+  return [c.head_office?'Head office':null, ...sites].filter(Boolean);
+}
+function clContactsHtml(){
+  const d=CREC.d, ed=PROFILE.role==='admin' && !clLocked();
+  const list=d.contacts.filter(c=>!c.archived_at);
+  const tick=(on,l)=>on?`<span class="chip cyan" style="margin:1px 3px 1px 0">${l}</span>`:'';
+  return `<div class="sechead" style="margin:0 0 8px"><h4 style="margin:0">Contacts</h4><span class="sub">Each contact belongs to one or more sites, or head office</span><span class="line"></span>${ed?`<button class="addbtn" onclick="clContactForm()">＋ Add contact</button>`:''}</div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Name</th><th>Phone / email</th><th>Site(s)</th><th>Used for</th><th></th></tr></thead><tbody>
+    ${list.map(c=>`<tr><td><b>${esc(c.name)}</b>${c.role?`<div class="muted" style="font-size:11.5px">${esc(c.role)}</div>`:''}</td>
+      <td style="font-size:12.5px">${esc(c.phone||'')}${c.phone&&c.email?'<br>':''}${c.email?`<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`:''}</td>
+      <td style="font-size:12.5px">${clContactWhere(c).map(esc).join(', ')||'<span class="muted">not set</span>'}</td>
+      <td>${tick(c.quote_contact,'Quotes')}${tick(c.accounts_contact,'Accounts')}${tick(c.portal_access,'Portal access')}</td>
+      <td style="text-align:right;white-space:nowrap">${ed?`<button class="btn-ghost" style="padding:4px 9px" onclick="clContactForm('${c.id}')">Edit</button> <button class="btn-ghost" style="padding:4px 9px" onclick="clContactRemove('${c.id}')">Remove</button>`:''}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted" style="padding:12px">No contacts yet.</td></tr>'}
+    </tbody></table></div>
+    <div class="note" style="margin-top:8px">Quotes offer the chosen site’s contacts plus head office. “Portal access” is a reminder only; logins are on the Portal logins tab.</div>`;
+}
+function clContactForm(id){
+  const c=id?CREC.d.contacts.find(x=>x.id===id):{head_office:!CREC.d.sites.length};
+  const mine=new Set(id?CREC.d.links.filter(l=>l.contact_id===id).map(l=>l.site_id):[]);
+  const sites=CREC.d.sites.filter(s=>!s.archived_at||mine.has(s.id));
+  const cb=(idn,on,l)=>`<label style="display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0"><input type="checkbox" id="${idn}" ${on?'checked':''} style="width:auto"> ${l}</label>`;
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:600px"><div class="modal-h"><h3>${id?'Edit contact':'Add contact'}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div class="frow"><div class="fld"><label>Name <span class="req">*</span></label><input id="cc_name" value="${esc(c.name||'')}"></div>
+        <div class="fld"><label>Role / title</label><input id="cc_role" value="${esc(c.role||'')}" placeholder="e.g. Site manager"></div></div>
+      <div class="frow"><div class="fld"><label>Phone</label><input id="cc_phone" value="${esc(c.phone||'')}"></div>
+        <div class="fld"><label>Email</label><input id="cc_email" type="email" value="${esc(c.email||'')}"></div></div>
+      <div class="fld"><label>Where they are</label><div class="card" style="padding:8px 12px">
+        ${cb('cc_ho',c.head_office,'<b>Head office</b>')}
+        ${sites.map(s=>`<label style="display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0"><input type="checkbox" class="cc_site" value="${s.id}" ${mine.has(s.id)?'checked':''} style="width:auto"> ${esc(clSiteName(s))}${s.city?` <span class="muted">· ${esc(s.city)}</span>`:''}</label>`).join('')||'<div class="muted" style="font-size:12.5px">No sites yet.</div>'}</div></div>
+      <div class="fld"><label>Used for</label><div style="display:flex;gap:18px;flex-wrap:wrap">${cb('cc_q',c.quote_contact,'Quote contact')}${cb('cc_a',c.accounts_contact,'Accounts contact')}${cb('cc_p',c.portal_access,'Portal access')}</div></div>
+      <div class="fld"><label>Notes</label><textarea id="cc_notes" rows="2">${esc(c.notes||'')}</textarea></div>
+    </div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="ccSave" onclick="clContactSave(${id?`'${id}'`:'null'})">${id?'Save':'Add contact'}</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function clContactSave(id){
+  const v=k=>{ const e=el(k); return e?e.value.trim():''; };
+  const row={client_id:CREC.id, name:v('cc_name'), role:v('cc_role')||null, phone:v('cc_phone')||null, email:v('cc_email')||null, notes:v('cc_notes')||null,
+    head_office:el('cc_ho').checked, quote_contact:el('cc_q').checked, accounts_contact:el('cc_a').checked, portal_access:el('cc_p').checked};
+  const want=[...document.querySelectorAll('.cc_site:checked')].map(x=>x.value);
+  if(!row.name) return msg('Enter the contact’s name.','err');
+  if(!row.head_office && !want.length) return msg('Tick head office or at least one site.','err');
+  el('ccSave').disabled=true;
+  const r=id?await sb.from('crm_contacts').update(row).eq('id',id).select().single():await sb.from('crm_contacts').insert(row).select().single();
+  if(r.error){ el('ccSave').disabled=false; return msg('Not saved: '+r.error.message,'err'); }
+  const cid=r.data.id, have=CREC.d.links.filter(l=>l.contact_id===cid).map(l=>l.site_id);
+  const add=want.filter(s=>!have.includes(s)), del=have.filter(s=>!want.includes(s));
+  if(add.length){ const a=await sb.from('crm_contact_sites').insert(add.map(s=>({contact_id:cid, site_id:s}))); if(a.error){ el('ccSave').disabled=false; return msg('Contact saved, but its sites were not: '+a.error.message,'err'); } }
+  if(del.length){ const x=await sb.from('crm_contact_sites').delete().eq('contact_id',cid).in('site_id',del); if(x.error){ el('ccSave').disabled=false; return msg('Contact saved, but a site was not removed: '+x.error.message,'err'); } }
+  closeForm(); QCONTACTS=null; await clLoadRec();
+}
+async function clContactRemove(id){
+  const c=CREC.d.contacts.find(x=>x.id===id);
+  const reason=prompt(`Remove ${c.name} from the contacts? Give a reason (e.g. left the company):`);
+  if(reason===null) return; if(!reason.trim()) return alert('A reason is needed.');
+  const r=await sb.from('crm_contacts').update({archived_at:new Date().toISOString(), archived_by:PROFILE.id, archive_reason:reason.trim()}).eq('id',id).select();
+  if(r.error) return alert('Not removed: '+r.error.message);
+  QCONTACTS=null; await clLoadRec();
+}
+
+/* --- Quotes and jobs --- */
+function clQuotes(){ return (QUOTES||[]).filter(q=>q.client_id===CREC.id); }
+function clJobs(){ return (JOBREG||[]).filter(j=>j.client_id===CREC.id); }
+function clQuotesHtml(){
+  if(!jobCan('quotes.view')) return `<div class="card muted">Your staff role does not include quotes.</div>`;
+  const list=clQuotes().filter(q=>!q.archived_at).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+  const can=jobCan('quotes.create') && !clLocked();
+  return `<div class="sechead" style="margin:0 0 8px"><h4 style="margin:0">Quotes &amp; leads</h4><span class="line"></span>
+      ${can?`<button class="btn-ghost" onclick="openQuote(null,true,{q:{client_id:'${CREC.id}'}})">＋ New lead</button><button class="addbtn" onclick="openQuote(null,false,{q:{client_id:'${CREC.id}'}})">＋ New quote</button>`:''}</div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Ref</th><th>Quote</th><th>Project Owner / Manager</th><th>Status</th><th>Created</th><th style="text-align:right">Value</th><th></th></tr></thead><tbody>
+    ${list.map(q=>`<tr><td style="white-space:nowrap"><b>${qRef(q)}</b></td><td>${esc(q.title)}${q.site_id?`<div class="muted" style="font-size:11.5px">${esc(jobSiteName(q.site_id))}</div>`:''}</td>
+      <td>${esc(qOwnerName(q.project_owner))}</td><td>${qStatusChip(q)}</td><td style="white-space:nowrap">${jobDate(String(q.created_at||'').slice(0,10))}</td>
+      <td style="text-align:right;white-space:nowrap">${q.status==='lead'?'—':jobMoney(q.total_sell,q.currency)}</td>
+      <td style="text-align:right"><button class="btn-ghost" style="padding:4px 9px" onclick="openQuote('${q.id}')">Open</button></td></tr>`).join('')
+      || '<tr><td colspan="7" class="muted" style="padding:12px">No quotes or leads for this client yet.</td></tr>'}
+    </tbody></table></div>`;
+}
+function clJobsHtml(){
+  if(!jobCan('jobs.view')) return `<div class="card muted">Your staff role does not include jobs.</div>`;
+  const list=clJobs().filter(j=>!j.archived_at).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+  const pnl=jobCan('margins.view');
+  const tot={};
+  list.forEach(j=>{ const c=j.currency||'GBP', ag=JOBAGG[j.id]||{}, p=JOBPNL[j.id]||{}; tot[c]=tot[c]||{v:0,i:0,gp:0}; tot[c].v+=Number(ag.revised||j.contract_value||0); tot[c].i+=Number(ag.invoiced||0); tot[c].gp+=Number(p.forecast_gp||0); });
+  return `<div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Job</th><th>Site</th><th>Status</th><th style="text-align:right">Value</th><th style="text-align:right">Invoiced</th>${pnl?'<th style="text-align:right">Forecast GP</th><th style="text-align:right">Margin</th>':''}<th></th></tr></thead><tbody>
+    ${list.map(j=>{ const ag=JOBAGG[j.id]||{}, p=JOBPNL[j.id]||{}, cur=j.currency||'GBP';
+      return `<tr><td style="white-space:nowrap"><b>${esc(j.job_ref||'')}</b><div class="muted" style="font-size:11.5px;white-space:normal">${esc(j.title||'')}</div></td><td>${esc(jobSiteName(j.site_id)||'—')}</td><td>${jobStatusChip(j.status)}</td>
+        <td style="text-align:right;white-space:nowrap">${jobMoney(ag.revised??j.contract_value,cur)}</td><td style="text-align:right;white-space:nowrap">${jobMoney(ag.invoiced||0,cur)}</td>
+        ${pnl?`<td style="text-align:right;white-space:nowrap">${p.forecast_gp!=null?jobMoney(p.forecast_gp,cur):'—'}</td><td style="text-align:right">${p.forecast_margin!=null?Number(p.forecast_margin).toFixed(1)+'%':'—'}</td>`:''}
+        <td style="text-align:right"><button class="btn-ghost" style="padding:4px 9px" onclick="openJobForm('${j.id}')">Open</button></td></tr>`; }).join('')
+      || `<tr><td colspan="${pnl?8:6}" class="muted" style="padding:12px">No jobs for this client yet. Jobs are converted from quotes.</td></tr>`}
+    ${list.length?Object.keys(tot).sort().map(c=>`<tr><td colspan="3"><b>Total ${esc(c)}</b></td><td style="text-align:right"><b>${jobMoney(tot[c].v,c)}</b></td><td style="text-align:right"><b>${jobMoney(tot[c].i,c)}</b></td>${pnl?`<td style="text-align:right"><b>${jobMoney(tot[c].gp,c)}</b></td><td style="text-align:right"><b>${tot[c].v?(tot[c].gp/tot[c].v*100).toFixed(1)+'%':'—'}</b></td>`:''}<td></td></tr>`).join(''):''}
+    </tbody></table></div>`;
+}
+
+/* --- Reports --- */
+function clReportsHtml(){
+  const R=CREC.d.reports, jref=id=>{ const j=(JOBREG||[]).find(x=>x.id===id); return j?j.job_ref:''; };
+  const list=[
+    ...R.co.map(r=>({type:'Call-out',page:'callouts',date:r.call_date||r.submitted_at,who:r.engineer,sum:r.fault_description,job:r.job_id,site:r.site_id,pdf:r.pdf_url})),
+    ...R.sh.map(r=>({type:'Shift',page:'shifts',date:r.shift_date||r.submitted_at,who:r.engineer,sum:r.work_completed,job:r.job_id,site:r.site_id,pdf:r.pdf_url})),
+    ...R.pr.map(r=>({type:'Install',page:'installs',date:r.report_date||r.submitted_at,who:r.engineer,sum:r.work_completed,job:r.job_id,site:r.site_id,pdf:r.pdf_url}))]
+    .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))).slice(0,150);
+  return `<div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>Job / site</th><th>Engineer</th><th>Summary</th><th></th></tr></thead><tbody>
+    ${list.map(r=>`<tr><td style="white-space:nowrap">${jobDate(String(r.date||'').slice(0,10))}</td><td>${esc(r.type)}</td>
+      <td style="white-space:nowrap">${r.job?esc(jref(r.job)):'<span class="muted">No job</span>'}${r.site?`<div class="muted" style="font-size:11.5px">${esc(jobSiteName(r.site))}</div>`:''}</td>
+      <td>${esc(r.who||'')}</td><td style="font-size:12.5px">${esc(String(r.sum||'').slice(0,140))}</td>
+      <td style="text-align:right;white-space:nowrap">${r.pdf?`<a class="pdf-link" href="${esc(r.pdf)}" target="_blank">PDF ↗</a>`:''}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="muted" style="padding:12px">No reports for this client yet.</td></tr>'}
+    </tbody></table></div>
+    ${clLocked()?'':`<div style="margin-top:8px;display:flex;gap:8px"><button class="btn-ghost" onclick="enterClientTo('${CREC.id}','callouts')">Call-out reports →</button><button class="btn-ghost" onclick="enterClientTo('${CREC.id}','shifts')">Shift reports →</button><button class="btn-ghost" onclick="enterClientTo('${CREC.id}','installs')">Install reports →</button></div>`}`;
+}
+
+/* --- Activity (engagement log) --- */
+function clActivityHtml(){
+  const ed=PROFILE.role==='admin' && !clLocked();
+  const cName=id=>{ const c=CREC.d.contacts.find(x=>x.id===id); return c?c.name:''; };
+  return `<div class="sechead" style="margin:0 0 8px"><h4 style="margin:0">Activity</h4><span class="sub">Calls, meetings, emails and site visits · internal</span><span class="line"></span>${ed?`<button class="addbtn" onclick="clActivityForm()">＋ Log activity</button>`:''}</div>
+    <div class="card"><div class="list">${CREC.d.acts.map(l=>`<div class="litem"><div class="av">${itypeIcon(l.itype)}</div>
+      <div class="bd"><div class="t">${esc(l.itype||'Note')}${cName(l.contact_id)?` · ${esc(cName(l.contact_id))}`:''}${l.logged_by?` <span class="muted" style="font-weight:500">· ${esc(l.logged_by)}</span>`:''}</div><div class="m">${esc(l.summary||'')}</div></div>
+      <div class="when">${jobDate(String(l.occurred_at||l.created_at||'').slice(0,10))}</div></div>`).join('')||'<div class="empty"><div class="big">🗒</div><b>Nothing logged yet</b></div>'}</div></div>`;
+}
+function clActivityForm(){
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:560px"><div class="modal-h"><h3>Log activity</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div class="frow"><div class="fld"><label>Type</label><select id="ia_type">${INTERACTION_TYPES.map(t=>`<option>${t}</option>`).join('')}</select></div>
+        <div class="fld"><label>Date</label><input id="ia_date" type="date" value="${ymd(new Date())}"></div></div>
+      <div class="fld"><label>Contact</label><select id="ia_contact"><option value="">— general —</option>${CREC.d.contacts.filter(c=>!c.archived_at).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+      <div class="fld"><label>Summary <span class="req">*</span></label><textarea id="ia_sum" rows="3" placeholder="What was discussed, agreed or actioned"></textarea></div>
+    </div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="iaSave" onclick="clActivitySave()">Save</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function clActivitySave(){
+  const sum=val('ia_sum').trim(); if(!sum) return msg('Add a short summary.','err');
+  el('iaSave').disabled=true;
+  const r=await sb.from('crm_interactions').insert({client_id:CREC.id, contact_id:val('ia_contact')||null, itype:val('ia_type'), summary:sum, occurred_at:val('ia_date')||ymd(new Date()), logged_by:PROFILE.full_name||PROFILE.email||null});
+  if(r.error){ el('iaSave').disabled=false; return msg('Not saved: '+r.error.message,'err'); }
+  closeForm(); await clLoadRec();
+}
+
+/* --- Portal logins --- */
+function clLoginsHtml(){
+  const list=(LOGINS||[]).filter(l=>l.client_id===CREC.id);
+  return `<div class="sechead" style="margin:0 0 8px"><h4 style="margin:0">Portal logins</h4><span class="sub">Who at the client can sign in to see their pages</span><span class="line"></span>${clLocked()?'':`<button class="addbtn" onclick="openLinkLogin('${CREC.id}')">🔗 Link login</button>`}</div>
+    <div class="card" style="padding:6px 8px"><table class="tbl"><thead><tr><th>Email</th><th>Name</th><th></th></tr></thead><tbody>
+    ${list.map(l=>`<tr><td>${esc(l.email||'')}</td><td>${esc(l.full_name||'')}</td><td style="text-align:right"><button class="btn-ghost" style="padding:4px 9px" onclick="clUnlinkLogin('${l.id}')">Unlink</button></td></tr>`).join('')
+      || '<tr><td colspan="3" class="muted" style="padding:12px">No logins. That’s fine — a client only needs one if someone there should sign in.</td></tr>'}
+    </tbody></table></div>
+    <div class="note" style="margin-top:8px">To add one: create the user in Supabase → Authentication → Users, then use <b>Link login</b> with that email.</div>`;
+}
+async function clUnlinkLogin(pid){
+  const l=(LOGINS||[]).find(x=>x.id===pid);
+  if(!confirm(`Unlink ${l?l.email:'this login'}? They will no longer see this client’s pages. The Supabase account itself stays.`)) return;
+  const r=await sb.from('profiles').update({client_id:null}).eq('id',pid).select();
+  if(r.error) return alert('Not unlinked: '+r.error.message);
+  await loadLogins(); clTab('logins');
+}
+
+/* --- Rates --- */
+function clRatesHtml(){
+  const a=CREC.d.acc, ed=jobCan('sell_rates.edit') && !clLocked(), dis=ed?'':'disabled';
+  const ent=JOBREG_ENTITIES.find(e=>e.code===a.entity_code), cur=a.rates_currency||(ent?ent.base_currency:'GBP');
+  const n=(id,v,ph)=>`<input type="number" min="0" step="0.01" id="${id}" ${dis} value="${v??''}" placeholder="${ph||''}">`;
+  return `<div class="card" style="max-width:720px"><h4 style="margin:0 0 4px">Rates for hourly work</h4>
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px">Used when this client is billed by the hour (call-outs and labour supply). Internal; never shown to the client.${ed?'':' Only Directors and Commercial can change them.'}</div>
+    <div class="frow"><div class="fld"><label>Currency</label><select id="cr_cur" ${dis}>${['GBP','EUR','USD'].map(c=>`<option ${c===cur?'selected':''}>${c}</option>`).join('')}</select></div>
+      <div class="fld"><label>Hourly rate</label>${n('cr_hour',a.hourly_rate,'e.g. 45.00')}</div></div>
+    <div class="frow"><div class="fld"><label>Call-out fee</label>${n('cr_call',a.callout_fee,'e.g. 95.00')}</div>
+      <div class="fld"><label>Mileage (per mile / km)</label>${n('cr_mile',a.mileage_rate,'e.g. 0.45')}</div></div>
+    <div class="frow"><div class="fld"><label>Out-of-hours uplift %</label>${n('cr_ooh',a.ooh_uplift_pct,'e.g. 50')}</div>
+      <div class="fld"><label>Weekend uplift %</label>${n('cr_wknd',a.weekend_uplift_pct,'e.g. 50')}</div></div>
+    <div class="fld"><label>Notes</label><textarea id="cr_note" rows="2" ${dis} placeholder="e.g. minimum 2 hours on call-outs">${esc(a.rates_note||'')}</textarea></div>
+    ${ed?`<div style="display:flex;gap:10px;align-items:center"><button class="btn" id="crSave" style="width:auto" onclick="clSaveRates()">Save rates</button><span class="savemsg" id="crMsg"></span></div>`:''}</div>`;
+}
+async function clSaveRates(){
+  const nv=k=>{ const x=el(k).value.trim(); return x===''?null:Number(x); };
+  const patch={rates_currency:val('cr_cur'), hourly_rate:nv('cr_hour'), callout_fee:nv('cr_call'), mileage_rate:nv('cr_mile'), ooh_uplift_pct:nv('cr_ooh'), weekend_uplift_pct:nv('cr_wknd'), rates_note:val('cr_note').trim()||null};
+  el('crSave').disabled=true;
+  const r=await sb.from('client_accounts').update(patch).eq('client_id',CREC.id).select().single();
+  el('crSave').disabled=false;
+  if(r.error) return clSay('crMsg','Not saved: '+r.error.message,'err');
+  CREC.d.acc=r.data; if(CLX) CLX.acc[CREC.id]=r.data; clSay('crMsg','✓ Saved.','ok');
+}
+
+/* ---------------- contacts for the quote form ---------------- */
+let QCONTACTS=null;
+async function qLoadContacts(){
+  if(QCONTACTS) return QCONTACTS;
+  const [c,l]=await Promise.all([sb.from('crm_contacts').select('id,client_id,name,email,phone,role,head_office,quote_contact,accounts_contact,archived_at').is('archived_at',null).order('name'),
+    sb.from('crm_contact_sites').select('contact_id,site_id')]);
+  QCONTACTS={list:c.data||[], links:l.data||[]};
+  return QCONTACTS;
+}
+function qContactOptions(clientId, siteId){
+  if(!QCONTACTS||!clientId) return '<option value="">— pick a contact —</option>';
+  const at=new Set(QCONTACTS.links.filter(l=>l.site_id===siteId).map(l=>l.contact_id));
+  const list=QCONTACTS.list.filter(c=>c.client_id===clientId && (c.head_office || (siteId && at.has(c.id))))
+    .sort((a,b)=>(b.quote_contact-a.quote_contact)||String(a.name).localeCompare(b.name));
+  return `<option value="">${list.length?'— pick a contact —':'— no contacts for this site yet —'}</option>`+list.map(c=>`<option value="${c.id}">${esc(c.name)}${at.has(c.id)?'':' · head office'}${c.quote_contact?' ★':''}</option>`).join('');
+}
+function qRefreshContacts(){ const p=el('qe_cpick'); if(p) p.innerHTML=qContactOptions(val('qe_client'), val('qe_site')); }
+function qPickContact(id){
+  const c=(QCONTACTS&&QCONTACTS.list||[]).find(x=>x.id===id); if(!c) return;
+  el('qe_cname').value=c.name||''; el('qe_cemail').value=c.email||'';
+}
+function qSiteChanged(sel){
+  if(sel.value==='__new'){ sel.value=''; el('qeNewSite').style.display=''; return; }
+  el('qeNewSite').style.display='none'; qRefreshContacts();
+}
+function qClientChanged(){ el('qe_site').innerHTML=jobSiteOptions(val('qe_client'),'',true); const n=el('qeNewSite'); if(n) n.style.display='none'; qRefreshContacts(); }
+async function qAddSite(){
+  const client=val('qe_client'); if(!client) return msg('Choose the client first.','err');
+  const row=clSiteRow('qs'); if(!row.name) return msg('Give the new site a name.','err');
+  const r=await sb.from('sites').insert({...row, client_id:client}).select().single();
+  if(r.error) return msg('Site not added: '+r.error.message,'err');
+  JOBREG_SITES.push(r.data);
+  el('qe_site').innerHTML=jobSiteOptions(client, r.data.id, true);
+  el('qeNewSite').style.display='none'; ['name','code','addr','city','country'].forEach(k=>{ const e=el('qs_'+k); if(e) e.value=''; });
+  qRefreshContacts(); msg('✓ Site added and chosen.','ok');
 }
 </script>
 </body>
