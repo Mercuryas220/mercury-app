@@ -406,6 +406,12 @@ tr[onclick]{cursor:pointer}
 .previewbar .spacer{flex:1}
 .previewbar button{border:0;border-radius:999px;padding:6px 14px;background:#04121f;color:#fff;font-family:inherit;font-weight:700;font-size:12.5px;cursor:pointer}
 @media (max-width:760px){ .previewbar{padding:8px 14px} .viewbadge{order:11} }
+
+/* ===== Release 11 (23 Nov 2026): tabs in the job window ===== */
+.jtabs{display:flex;gap:4px;flex-wrap:wrap;padding:0 18px 10px;border-bottom:1px solid var(--line)}
+.jtab{border:1px solid transparent;background:transparent;color:var(--muted);font-family:inherit;font-weight:700;font-size:12.5px;padding:7px 12px;border-radius:999px;cursor:pointer}
+.jtab:hover{color:var(--text);border-color:var(--line2)}
+.jtab.on{background:var(--panel2);color:var(--text);border-color:var(--line2)}
 </style>
 </head>
 <body>
@@ -5180,7 +5186,9 @@ function buildCharts(page){
 
 let JOBREG=null, JOBREG_ERR=null, JOBREG_LOADING=false;
 let JOBREG_SITES=[], JOBREG_ENTITIES=[], MYPERMS=null;
-let JOBREG_F={status:'open', entity:'all', client:'all', q:'', archived:false};
+let JOBREG_F={status:'all', entity:'all', client:'all', owner:'all', q:'', archived:false};
+let JOBAGG={};   // per job: revised value and invoiced (for the list)
+let JOB_TAB='ov'; // job window tab, remembered while the app is open
 
 TITLES.jobreg='Jobs';
 
@@ -5231,6 +5239,17 @@ async function loadJobRegister(){
     ]);
     if(ents.error) throw ents.error;
     JOBREG=jobs; JOBREG_ENTITIES=ents.data||[]; JOBREG_SITES=sites;
+    JOBAGG={};
+    if(jobCan('jobs.view')){
+      try{
+        const [bs,vs]=await Promise.all([
+          jobFetchAll(()=>sb.from('job_billing_stages').select('job_id,status,invoiced_amount')),
+          jobFetchAll(()=>sb.from('job_variations').select('job_id,status,sell_total').eq('status','approved'))]);
+        jobs.forEach(j=>{ JOBAGG[j.id]={revised:Number(j.contract_value||0), invoiced:0}; });
+        vs.forEach(v=>{ if(JOBAGG[v.job_id]) JOBAGG[v.job_id].revised+=Number(v.sell_total||0); });
+        bs.forEach(b=>{ if(b.status==='invoiced' && JOBAGG[b.job_id]) JOBAGG[b.job_id].invoiced+=Number(b.invoiced_amount||0); });
+      }catch(e){ console.warn('job totals',e); }
+    }
     if(typeof loadJobPnl==='function') await loadJobPnl();
     if(!LOGINS || !LOGINS.length){ try{ await loadLogins(); }catch(e){} }
   }catch(e){ JOBREG_ERR=e.message||String(e); JOBREG=JOBREG||[]; }
@@ -5244,9 +5263,12 @@ function jobFiltered(){
     if(!f.archived && j.archived_at) return false;
     if(f.archived && !j.archived_at) return false;
     if(f.status==='open' && !JOB_OPEN.includes(j.status)) return false;
-    if(f.status!=='open' && f.status!=='all' && j.status!==f.status) return false;
+    if(f.status==='openonly' && !['created','mobilising'].includes(j.status)) return false;
+    if(f.status==='liveonly' && !['live','complete'].includes(j.status)) return false;
+    if(!['open','all','openonly','liveonly'].includes(f.status) && j.status!==f.status) return false;
     if(f.entity!=='all' && j.entity_code!==f.entity) return false;
     if(f.client!=='all' && j.client_id!==f.client) return false;
+    if(f.owner!=='all' && (j.job_manager||'')!==f.owner) return false;
     if(q && ![j.job_ref,j.title,j.client_po_ref,j.location,jobClientName(j.client_id),jobSiteName(j.site_id)].some(v=>String(v||'').toLowerCase().includes(q))) return false;
     return true;
   });
@@ -5257,19 +5279,22 @@ function jobSetFilter(k,v){ JOBREG_F[k]=v; const t=el('jobTable'); if(t){ t.inne
 function jobTableHtml(){
   const rows=jobFiltered(); const showVal=true;
   if(!rows.length) return `<div class="empty" style="padding:26px"><div class="big">📋</div><b>No jobs match</b><div style="margin-top:6px;font-size:13px">${(JOBREG||[]).length?'Try a different filter.':'Jobs are created by converting an accepted quote (Quotes → Convert to job).'}</div></div>`;
-  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Q ref</th><th>Job</th><th>Client</th><th>Site</th><th>Co.</th><th>Status</th><th>Dates</th>${showVal?'<th style="text-align:right">Contract value</th>':''}${jobCan('margins.view')?'<th>P&amp;L</th>':''}<th></th></tr></thead><tbody>${
-    rows.map(j=>`<tr${j.archived_at?' style="opacity:.6"':''}>
-      <td><b style="white-space:nowrap">${esc(j.job_ref)}</b></td>
+  const showM=jobCan('margins.view');
+  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Q ref</th><th>Job</th><th>Client / site</th><th>Project Owner / Manager</th><th>Status</th><th>Created</th><th>Dates</th><th style="text-align:right">Value</th>${showM?'<th>Forecast margin</th>':''}<th style="text-align:right">Invoiced</th><th></th></tr></thead><tbody>${
+    rows.map(j=>{ const a=JOBAGG[j.id]||{revised:Number(j.contract_value||0),invoiced:0}; const pc=a.revised>0?Math.round(a.invoiced/a.revised*100):0;
+      return `<tr${j.archived_at?' style="opacity:.6"':''}>
+      <td><b style="white-space:nowrap">${esc(j.job_ref)}</b><div class="muted" style="font-size:11px">${esc(j.entity_code)}</div></td>
       <td>${esc(j.title)}${j.client_po_ref?`<div class="muted" style="font-size:11.5px">PO ${esc(j.client_po_ref)}</div>`:''}</td>
-      <td>${esc(jobClientName(j.client_id))}</td>
-      <td>${esc(jobSiteName(j.site_id))}</td>
-      <td>${esc(j.entity_code)}</td>
+      <td>${esc(jobClientName(j.client_id))}${j.site_id?`<div class="muted" style="font-size:11.5px">${esc(jobSiteName(j.site_id))}</div>`:''}</td>
+      <td style="font-size:12.5px">${esc(typeof qOwnerName==='function'?qOwnerName(j.job_manager):'')}</td>
       <td>${jobStatusChip(j.status)}${j.archived_at?' <span class="chip grey">Archived</span>':''}</td>
+      <td style="white-space:nowrap">${jobDate(String(j.created_at||'').slice(0,10))}</td>
       <td style="white-space:nowrap">${jobDate(j.start_date)}${j.end_date?' – '+jobDate(j.end_date):''}</td>
-      ${showVal?`<td style="text-align:right;white-space:nowrap">${jobMoney(j.contract_value,j.currency)}</td>`:''}
-      ${jobCan('margins.view')?`<td style="white-space:nowrap">${typeof JOBPNL!=='undefined'&&JOBPNL[j.id]?ragChip(JOBPNL[j.id].rag)+' <span class="muted" style="font-size:12px">'+pct(JOBPNL[j.id].forecast_margin)+'</span>':''}</td>`:''}
+      <td style="text-align:right;white-space:nowrap">${jobMoney(a.revised,j.currency)}</td>
+      ${showM?`<td style="white-space:nowrap">${typeof JOBPNL!=='undefined'&&JOBPNL[j.id]?ragChip(JOBPNL[j.id].rag)+' <span class="muted" style="font-size:12px">'+pct(JOBPNL[j.id].forecast_margin)+'</span>':''}</td>`:''}
+      <td style="text-align:right;white-space:nowrap">${a.invoiced?pc+'%':'—'}<div class="muted" style="font-size:11px">${a.invoiced?jobMoney(a.invoiced,j.currency):''}</div></td>
       <td><button class="btn-ghost" style="padding:5px 10px" onclick="openJobForm('${j.id}')">${jobCan('jobs.edit')?'Open':'View'}</button></td>
-    </tr>`).join('')}</tbody></table></div>`;
+    </tr>`; }).join('')}</tbody></table></div>`;
 }
 
 function pageJobRegister(){
@@ -5277,26 +5302,24 @@ function pageJobRegister(){
   if(JOBREG===null){ loadJobRegister(); return emptyState('⏳','Loading jobs…','One moment.'); }
   if(JOBREG_ERR) return emptyState('⚠','Could not load jobs', esc(JOBREG_ERR)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="JOBREG=null;go('jobreg')">Try again</button></div>`);
   if(!jobCan('jobs.view')) return emptyState('🔒','No access to jobs','Your staff role does not include viewing jobs. Ask a Director.');
-  const open=(JOBREG||[]).filter(j=>!j.archived_at && JOB_OPEN.includes(j.status));
-  const count=s=>open.filter(j=>j.status===s).length;
-  let valueKpi='';
-  {
-    const byCur={}; open.forEach(j=>{ if(j.contract_value!=null) byCur[j.currency]=(byCur[j.currency]||0)+Number(j.contract_value); });
-    const txt=Object.keys(byCur).sort().map(c=>jobMoney(byCur[c],c).replace(/\.00$/,'')).join(' · ')||'—';
-    valueKpi=`<div class="card kpi"><div class="spark">💷</div><div class="lbl">Open value</div><div class="val" style="font-size:20px">${txt}</div></div>`;
-  }
-  const header=`<div class="sechead"><h3>📋 Jobs</h3><span class="sub">Created from accepted quotes · Q reference for life · <span id="jobCount">${jobFiltered().length}</span> shown</span><span class="line"></span>${jobCan('quotes.view')?`<button class="addbtn" onclick="go('quotereg')">📝 Quotes</button>`:''}</div>`;
+  const live=(JOBREG||[]).filter(j=>!j.archived_at);
+  const sumCur=(list,f)=>{ const by={}; list.forEach(j=>{ by[j.currency]=(by[j.currency]||0)+f(j); }); return Object.keys(by).sort().map(c=>jobMoney(by[c],c).replace(/\.00$/,'')).join(' · ')||'—'; };
+  const ag=j=>JOBAGG[j.id]||{revised:Number(j.contract_value||0),invoiced:0};
+  const openJ=live.filter(j=>['created','mobilising'].includes(j.status)), liveJ=live.filter(j=>j.status==='live'||j.status==='complete');
+  const rti=live.filter(j=>j.status==='ready_to_invoice'), totJ=live.filter(j=>!['invoiced','closed','cancelled'].includes(j.status));
+  const tile=(ic,l,v,sub,st)=>`<div class="card kpi kpi-link" role="button" tabindex="0" onclick="JOBREG_F.status='${st}';go('jobreg')"><div class="spark">${ic}</div><div class="lbl">${l}</div><div class="val">${v}</div>${sub?`<div class="muted" style="font-size:12px;margin-top:2px">${sub}</div>`:''}<div class="kpi-go">→</div></div>`;
+  const header=`<div class="sechead"><h3>📋 Jobs</h3><span class="sub">Created from quotes · Q reference for life · <span id="jobCount">${jobFiltered().length}</span> shown</span><span class="line"></span>${jobCan('quotes.view')?`<button class="addbtn" onclick="go('quotereg')">📝 Quotes</button>`:''}</div>`;
   const kpis=`<div class="grid kpis" style="margin-bottom:14px">
-    ${kpi('','📋','Open jobs',open.length)}
-    ${kpi('','🚚','Mobilising',count('mobilising'))}
-    ${kpi('','🟢','Live',count('live'))}
-    ${kpi('','🧾','Ready to invoice',count('ready_to_invoice'))}
-    ${valueKpi}</div>`;
+    ${tile('📋','Open jobs',openJ.length,'Created or mobilising','openonly')}
+    ${tile('🟢','Live jobs',liveJ.length,'Work under way','liveonly')}
+    ${tile('🧾','Ready to invoice',rti.length,rti.length?sumCur(rti,j=>ag(j).revised-ag(j).invoiced)+' to invoice':'','ready_to_invoice')}
+    <div class="card kpi"><div class="spark">💷</div><div class="lbl">Total value</div><div class="val" style="font-size:19px">${sumCur(totJ,j=>ag(j).revised)}</div><div class="muted" style="font-size:12px;margin-top:2px">${sumCur(totJ,j=>ag(j).revised-ag(j).invoiced)} left to invoice</div></div></div>`;
   const opt=(v,l,cur)=>`<option value="${esc(v)}" ${v===cur?'selected':''}>${esc(l)}</option>`;
   const clientIds=[...new Set((JOBREG||[]).map(j=>j.client_id))];
   const filters=`<div class="card fld" style="padding:12px 14px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
     <input placeholder="Search Q ref, job, client, PO…" value="${esc(JOBREG_F.q)}" oninput="jobSetFilter('q',this.value)" style="flex:1;min-width:200px;width:auto">
-    <select style="width:auto" onchange="jobSetFilter('status',this.value)">${opt('open','Open jobs',JOBREG_F.status)}${opt('all','All statuses',JOBREG_F.status)}${JOB_STATUSES.map(s=>opt(s[0],s[1],JOBREG_F.status)).join('')}</select>
+    <select style="width:auto" onchange="jobSetFilter('status',this.value)">${opt('all','All statuses',JOBREG_F.status)}${opt('open','Not yet invoiced',JOBREG_F.status)}${opt('openonly','Open (created / mobilising)',JOBREG_F.status)}${opt('liveonly','Live (incl. complete)',JOBREG_F.status)}${JOB_STATUSES.map(s=>opt(s[0],s[1],JOBREG_F.status)).join('')}</select>
+    <select style="width:auto" onchange="jobSetFilter('owner',this.value)">${opt('all','All owners',JOBREG_F.owner)}${[...new Set((JOBREG||[]).map(j=>j.job_manager).filter(Boolean))].map(id=>opt(id,typeof qOwnerName==='function'?qOwnerName(id):id,JOBREG_F.owner)).join('')}</select>
     <select style="width:auto;max-width:280px" onchange="jobSetFilter('entity',this.value)">${opt('all','All companies',JOBREG_F.entity)}${JOBREG_ENTITIES.map(e=>opt(e.code,e.code+' — '+e.legal_name,JOBREG_F.entity)).join('')}</select>
     <select style="width:auto" onchange="jobSetFilter('client',this.value)">${opt('all','All clients',JOBREG_F.client)}${clientIds.map(id=>opt(id,jobClientName(id),JOBREG_F.client)).join('')}</select>
     <label style="display:flex;gap:6px;align-items:center;font-size:13px;white-space:nowrap"><input type="checkbox" style="width:auto;padding:0" ${JOBREG_F.archived?'checked':''} onchange="jobSetFilter('archived',this.checked)"> Archived only</label>
@@ -5314,6 +5337,21 @@ function jobEntityChanged(){
   const lbl=el('jb_cur'); if(lbl) lbl.textContent=e?e.base_currency:'';
 }
 
+const JOB_TABS=[['ov','Overview'],['costs','Costs & POs'],['labour','Labour'],['vars','Variations'],['billing','Billing'],['team','Team'],['mob','Mobilisation'],['reports','Reports'],['atts','Attachments'],['hist','History']];
+function jobTab(t){
+  if(!JOB_TABS.some(x=>x[0]===t)) t='ov';
+  JOB_TAB=t;
+  document.querySelectorAll('#jobTabs .jtab').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+  document.querySelectorAll('.jtab-pane').forEach(p=>p.style.display=p.dataset.t===t?'':'none');
+  const sv=el('jbSave'); if(sv) sv.style.display=t==='ov'?'':'none';   // Save only applies to the Overview details
+  const j=(JOBREG||[]).find(x=>x.id===(el('jobTabs')||{}).dataset?.job);
+  if(!j) return;
+  if(t==='team' && typeof jobLoadTeam==='function') jobLoadTeam(j);
+  if(t==='mob' && typeof jobLoadMobilisation==='function') jobLoadMobilisation(j);
+  if(t==='reports' && typeof jobLoadReports==='function') jobLoadReports(j);
+  if(t==='atts' && typeof jobLoadAttachments==='function') jobLoadAttachments(j);
+  if(t==='hist') jobLoadHistory(j);
+}
 function openJobForm(id){
   const j=id?((JOBREG||[]).find(x=>x.id===id)||{}):{};
   const isNew=!id, canEdit=isNew?jobCan('jobs.create'):(jobCan('jobs.edit') && !j.archived_at);
@@ -5321,10 +5359,8 @@ function openJobForm(id){
   const fromQuote=j.source==='quote';
   const ent=JOBREG_ENTITIES.find(e=>e.code===j.entity_code);
   const managers=(LOGINS||[]).filter(l=>l.role==='admin');
-  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal" style="max-width:1040px;width:96vw"><div class="modal-h"><h3>${isNew?'New job':esc(j.job_ref)+' · '+esc(j.title)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
-    <div class="modal-b">
-      ${!isNew?`<div id="jobPnl"></div>`:''}
+  const pane=(t,inner)=>`<div class="jtab-pane" data-t="${t}" style="${(isNew?'ov':JOB_TAB)===t?'':'display:none'}">${inner}</div>`;
+  const details=`
       ${isNew?`<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">The Q reference is issued automatically when you save, and stays with this job for life. The trading company and currency cannot be changed afterwards.</div>`:''}
       ${j.archived_at?`<div class="box" style="background:var(--amber-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Archived</b> ${jobDate(j.archived_at)} — ${esc(j.archive_reason||'')}</div>`:''}
       <div class="frow">
@@ -5351,21 +5387,27 @@ function openJobForm(id){
         <div class="fld"><label>Start date</label><input id="jb_start" ${dis} type="date" value="${esc(String(j.start_date||'').slice(0,10))}"></div>
         <div class="fld"><label>End date</label><input id="jb_end" ${dis} type="date" value="${esc(String(j.end_date||'').slice(0,10))}"></div>
       </div>
-      <div class="fld"><label>Project Owner / Manager</label><select id="jb_mgr" ${dis}><option value="">— none —</option>${managers.map(m=>`<option value="${m.id}" ${m.id===j.job_manager?'selected':''}>${esc(m.email)}</option>`).join('')}</select></div>
+      <div class="frow">
+        <div class="fld"><label>Project Owner / Manager</label><select id="jb_mgr" ${dis}><option value="">— none —</option>${managers.map(m=>`<option value="${m.id}" ${m.id===j.job_manager?'selected':''}>${esc(m.full_name||m.email)}</option>`).join('')}</select></div>
+        ${isNew?'':`<div class="fld"><label>Progress %</label><div style="display:flex;gap:10px;align-items:center"><input id="jb_prog" ${dis} type="number" min="0" max="100" step="1" style="width:110px" value="${esc(j.progress_pct??0)}"><span class="muted" style="font-size:12px" id="jbInstallPct"></span></div></div>`}
+      </div>
       <div class="fld"><label>Notes</label><textarea id="jb_notes" ${dis} rows="2">${esc(j.notes||'')}</textarea></div>
       ${fromQuote?`<div class="muted" style="font-size:12.5px;margin-top:4px">From quote <a href="#" onclick="event.preventDefault();closeForm();QUOTES=null;go('quotereg')">${esc(j.job_ref)}</a>${j.client_po_ref?' · client PO '+esc(j.client_po_ref):''}</div>`:''}
-      ${jobCan('margins.view')&&!isNew?`<div id="jobBudget" style="margin-top:12px"></div>`:''}
-      ${!isNew?`<div id="jobCosts" style="margin-top:14px"></div>`:''}
-      ${!isNew?`<div id="jobLabour" style="margin-top:14px"></div>`:''}
-      ${!isNew?`<div id="jobVars" style="margin-top:14px"></div>`:''}
-      ${!isNew?`<div id="jobBilling" style="margin-top:14px"></div>`:''}
+      ${jobCan('margins.view')&&!isNew?`<div id="jobBudget" style="margin-top:12px"></div>`:''}`;
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:1100px;width:96vw"><div class="modal-h"><h3>${isNew?'New job':esc(j.job_ref)+' · '+esc(j.title)} ${isNew?'':jobStatusChip(j.status)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    ${isNew?'':`<div class="jtabs" id="jobTabs" data-job="${j.id}">${JOB_TABS.map(t=>`<button class="jtab ${JOB_TAB===t[0]?'on':''}" data-t="${t[0]}" onclick="jobTab('${t[0]}')">${esc(t[1])}</button>`).join('')}</div>`}
+    <div class="modal-b">
+      ${pane('ov', (!isNew?`<div id="jobPnl"></div>`:'')+details)}
+      ${isNew?'':pane('costs',`<div id="jobCosts"></div>`)+pane('labour',`<div id="jobLabour"></div>`)+pane('vars',`<div id="jobVars"></div>`)+pane('billing',`<div id="jobBilling"></div>`)
+        +pane('team',`<div id="jobTeam"><div class="muted">Loading…</div></div>`)+pane('mob',`<div id="jobMob"><div class="muted">Loading…</div></div>`)
+        +pane('reports',`<div id="jobReports"><div class="muted">Loading…</div></div>`)+pane('atts',`<div id="jobAtts"><div class="muted">Loading…</div></div>`)+pane('hist',`<div id="jobHist"><div class="muted">Loading…</div></div>`)}
     </div>
     <div class="modal-foot">
-      ${!isNew&&jobCan('history.view')?`<button class="btn-ghost" onclick="openJobHistory('${j.id}')">History</button>`:''}
       ${!isNew&&!j.archived_at&&jobCan('jobs.edit')?`<button class="btn-ghost" style="color:var(--red)" onclick="archiveJob('${j.id}')">Archive</button>`:''}
       ${j.archived_at&&jobCan('records.restore')?`<button class="btn-ghost" onclick="restoreJob('${j.id}')">Restore</button>`:''}
       <button class="btn-ghost" onclick="closeForm()">${canEdit?'Cancel':'Close'}</button>
-      ${canEdit?`<button class="btn" id="jbSave" onclick="submitJob(${id?`'${id}'`:'null'})">${isNew?'Create job':'Save'}</button>`:''}
+      ${canEdit?`<button class="btn" id="jbSave" onclick="submitJob(${id?`'${id}'`:'null'})">${isNew?'Create job':'Save details'}</button>`:''}
     </div>
     <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
   document.body.appendChild(wrap);
@@ -5375,6 +5417,22 @@ function openJobForm(id){
   if(!isNew && typeof jobLoadPnl==='function') jobLoadPnl(j);
   if(!isNew && typeof jobLoadVariations==='function') jobLoadVariations(j);
   if(!isNew && typeof jobLoadBilling==='function') jobLoadBilling(j);
+  if(!isNew){ jobTab(JOB_TAB); jobLatestInstallPct(j); }
+}
+async function jobLatestInstallPct(j){
+  try{ const r=await sb.from('progress_reports').select('progress_pct,report_date,submitted_at').eq('job_id',j.id).order('submitted_at',{ascending:false}).limit(1);
+    const x=(r.data||[])[0]; const e=el('jbInstallPct'); if(e && x && x.progress_pct!=null) e.textContent=`Latest install report: ${Math.round(x.progress_pct)}% (${jobDate(String(x.report_date||x.submitted_at||'').slice(0,10))})`; }catch(e){}
+}
+async function jobLoadHistory(j){
+  const box=el('jobHist'); if(!box) return;
+  if(!jobCan('history.view')){ box.innerHTML='<div class="muted">Your role cannot see change history.</div>'; return; }
+  const r=await sb.from('change_history').select('changed_at,user_email,action,changes').eq('table_name','jobs').eq('record_id',j.id).order('changed_at',{ascending:false}).limit(300);
+  if(r.error){ box.innerHTML=`<div class="muted">Could not load: ${esc(r.error.message)}</div>`; return; }
+  const skip=['updated_at','archived_by','id','created_by','created_at'];
+  const fmt=x=>x==null||x===''?'—':esc(typeof x==='object'?JSON.stringify(x):String(x));
+  const rows=(r.data||[]).map(h=>{ let d=h.action==='insert'?'Job created':''; if(h.changes&&typeof h.changes==='object'&&h.action!=='insert') d=Object.keys(h.changes).filter(k=>!skip.includes(k)).map(k=>`<div><b>${esc(k.replace(/_/g,' '))}</b>: ${fmt(h.changes[k].from)} → ${fmt(h.changes[k].to)}</div>`).join('')||'<span class="muted">—</span>';
+    return `<tr><td style="white-space:nowrap">${new Date(h.changed_at).toLocaleString('en-GB')}</td><td>${esc(h.user_email||'system')}</td><td>${d}</td></tr>`; }).join('');
+  box.innerHTML=`<div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>When</th><th>Who</th><th>Changes</th></tr></thead><tbody>${rows||'<tr><td colspan="3" class="muted">No changes recorded.</td></tr>'}</tbody></table></div>`;
 }
 
 async function jobLoadBudget(j){
@@ -5396,6 +5454,7 @@ async function submitJob(id){
     site_id:v('jb_site')||null, title:v('jb_title'),
     description:v('jb_desc')||null, location:v('jb_loc')||null, client_po_ref:v('jb_po')||null,
     start_date:v('jb_start')||null, end_date:v('jb_end')||null, job_manager:v('jb_mgr')||null, notes:v('jb_notes')||null };
+  if(el('jb_prog')){ const pv=Number(v('jb_prog')||0); if(isNaN(pv)||pv<0||pv>100) return msg('Progress must be between 0 and 100.','err'); payload.progress_pct=pv; }
   if(el('jb_status') && !el('jb_status').disabled) payload.status=v('jb_status');
   if(isNew) payload.entity_code=v('jb_entity');
   if(isNew && !payload.entity_code) return msg('Choose the trading company.','err');
@@ -6550,7 +6609,7 @@ async function jobLoadCosts(j){
   const otherRows=(other.data||[]).map(o=>`<tr${o.status==='void'?' style="opacity:.55;text-decoration:line-through"':''}><td>${jobDate(o.cost_date)}</td><td>${esc(o.cost_code)}</td><td>${esc((OTHER_SOURCES.find(s=>s[0]===o.source)||[,o.source])[1])}</td><td>${esc(o.description)}${o.supplier_name?' · '+esc(o.supplier_name):''}</td><td style="text-align:right">${jobMoney(o.amount,cur)}</td><td>${o.status==='void'?'Void':(jobCan('costs.enter')?`<button class="btn-ghost" style="padding:3px 8px" onclick="jobVoidCost('${o.id}','${j.id}')">Void</button>`:'')}</td></tr>`).join('');
   const canAct=!j.archived_at && !['closed','cancelled'].includes(j.status);
   box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="font-weight:700;flex:1">Costs</div>
-      ${canAct&&jobCan('po.create')?`<button class="btn-ghost" onclick="closeForm();openPO(null,'${j.id}')">＋ Raise PO</button>`:''}
+      ${canAct&&jobCan('po.create')?`<button class="btn-ghost" onclick="closeForm();openPO(null,'${j.id}')">＋ New PO</button>`:''}
       ${canAct&&jobCan('costs.enter')?`<button class="btn-ghost" onclick="jobOtherCostForm('${j.id}')">＋ Other cost</button>`:''}</div>
     <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead>${head}</thead><tbody>${rows||'<tr><td colspan="7" class="muted">No costs yet.</td></tr>'}${tot}</tbody></table>
       <div class="muted" style="font-size:11.5px;padding:6px 4px">Committed = ordered on open POs but not yet invoiced. When the invoice is entered it moves to actual, so nothing is counted twice.</div></div>
@@ -7657,6 +7716,212 @@ async function qreqDecline(id){
   if(u.error||!u.data||!u.data.length){ alert('Not saved: '+(u.error?u.error.message:'no permission')); return; }
   try{ await notifyClient(r.client_id,'quote','Request declined: '+(r.title||'your request'),'quotes','We’re not able to take this one on: '+reason.trim()); }catch(e){}
   qreqReload();
+}
+/* ===================================================================
+   JOB TABS  —  release 11: Team, Mobilisation, Reports, Attachments.
+   People are planned into jobs on the Team tab (with a warning when they
+   are already on another job for overlapping dates). Mobilisation shows
+   what still has to be in place before the job starts.
+   =================================================================== */
+
+let TEAMW=null;   // people register, for the Team tab
+const TEAM_ROLES=['Supervisor','Engineer','Technician','Electrician','Fitter','Labourer','Other'];
+const TEAM_WTYPES={employed:'Employed', self_employed:'Self-employed', agency:'Agency', unclassified:'To classify'};
+function jobById(id){ return (JOBREG||[]).find(x=>x.id===id); }
+async function jobWorkers(){
+  if(TEAMW) return TEAMW;
+  const r=await sb.from('workers').select('id,full_name,worker_type,supplier_id,active').order('full_name');
+  TEAMW=r.error?[]:(r.data||[]); return TEAMW;
+}
+const teamWorkerName=id=>{ const w=(TEAMW||[]).find(x=>x.id===id); return w?w.full_name:'—'; };
+const overlaps=(a1,a2,b1,b2)=>(!a1||!b2||a1<=b2)&&(!b1||!a2||b1<=a2);
+
+/* ---------- Team ---------- */
+async function jobLoadTeam(j){
+  const box=el('jobTeam'); if(!box) return;
+  await jobWorkers();
+  const r=await sb.from('job_team').select('*').eq('job_id',j.id).order('created_at');
+  if(r.error){ box.innerHTML=`<div class="muted">Could not load the team: ${esc(r.error.message)}</div>`; return; }
+  const rows=r.data||[], live=rows.filter(x=>!x.removed_at), gone=rows.filter(x=>x.removed_at);
+  // other jobs each person is on, for the clash warning
+  const ids=[...new Set(live.map(x=>x.worker_id))]; let others=[];
+  if(ids.length){ const o=await sb.from('job_team').select('id,job_id,worker_id,start_date,end_date').in('worker_id',ids).is('removed_at',null).neq('job_id',j.id); others=o.data||[]; }
+  const can=jobCan('jobs.edit') && !j.archived_at && !['closed','cancelled'].includes(j.status);
+  const clash=x=>others.filter(o=>o.worker_id===x.worker_id && overlaps(x.start_date,x.end_date,o.start_date,o.end_date));
+  const tr=(x,removed)=>{ const w=(TEAMW||[]).find(y=>y.id===x.worker_id)||{}; const c=removed?[]:clash(x);
+    return `<tr style="${removed?'opacity:.55':''}"><td><b>${esc(w.full_name||'—')}</b><div class="muted" style="font-size:11.5px">${esc(TEAM_WTYPES[w.worker_type]||'')}</div></td><td>${esc(x.role)}</td>
+      <td style="white-space:nowrap">${x.start_date?jobDate(x.start_date):'—'} – ${x.end_date?jobDate(x.end_date):'—'}</td>
+      <td style="font-size:12.5px">${esc(x.notes||'')}${c.length?`<div style="color:var(--amber)">⚠ Also on ${c.map(o=>{ const oj=jobById(o.job_id); return esc(oj?oj.job_ref:'another job')+(o.start_date?' ('+jobDate(o.start_date)+(o.end_date?' – '+jobDate(o.end_date):'')+')':''); }).join(', ')}</div>`:''}${removed?`<div class="muted">Removed: ${esc(x.remove_reason||'')}</div>`:''}</td>
+      <td style="text-align:right;white-space:nowrap">${can&&!removed?`<button class="btn-ghost" style="padding:4px 9px" onclick="jobTeamForm('${j.id}','${x.id}')">Edit</button> <button class="btn-ghost" style="padding:4px 9px;color:var(--red)" onclick="jobTeamRemove('${j.id}','${x.id}')">Remove</button>`:''}</td></tr>`; };
+  box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap"><div style="font-weight:700;flex:1">Team <span class="muted" style="font-weight:500;font-size:12.5px">· ${live.length} allocated</span></div>
+      ${can?`<button class="btn-ghost" onclick="jobTeamCopyForm('${j.id}')">Copy team from another job</button><button class="btn-ghost" onclick="jobTeamForm('${j.id}')">＋ Add person</button>`:''}</div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Person</th><th>Role</th><th>Dates</th><th>Notes</th><th></th></tr></thead>
+      <tbody>${live.map(x=>tr(x,false)).join('')||'<tr><td colspan="5" class="muted" style="padding:12px">Nobody allocated yet. Add the people who will work on this job, with their dates.</td></tr>'}${gone.map(x=>tr(x,true)).join('')}</tbody></table>
+      <div class="muted" style="font-size:11.5px;padding:6px 4px">Everyone is picked from the people register (employed, self-employed and agency). A warning shows when someone is already on another job for overlapping dates. Compliance checks (expired cards or right to work) are added in a later release.</div></div>`;
+}
+async function jobTeamForm(jobId, rowId){
+  const j=jobById(jobId); await jobWorkers();
+  let x={role:'Engineer', start_date:j.start_date, end_date:j.end_date};
+  if(rowId){ const r=await sb.from('job_team').select('*').eq('id',rowId).single(); if(!r.error) x=r.data; }
+  const ws=(TEAMW||[]).filter(w=>w.active || w.id===x.worker_id);
+  const groups=['employed','self_employed','agency','unclassified'].map(t=>{ const g=ws.filter(w=>w.worker_type===t); return g.length?`<optgroup label="${esc(TEAM_WTYPES[t])}">${g.map(w=>`<option value="${w.id}" ${w.id===x.worker_id?'selected':''}>${esc(w.full_name)}</option>`).join('')}</optgroup>`:''; }).join('');
+  billModal('jtModal', `${rowId?'Edit':'Add'} team member · ${esc(j.job_ref)}`,
+    `<div class="fld"><label>Person <span class="req">*</span></label><select id="jt_worker" ${rowId?'disabled':''}><option value="">— choose —</option>${groups}</select></div>
+     <div class="frow"><div class="fld"><label>Role</label><select id="jt_role">${TEAM_ROLES.map(r=>`<option ${r===x.role?'selected':''}>${r}</option>`).join('')}${TEAM_ROLES.includes(x.role)?'':`<option selected>${esc(x.role)}</option>`}</select></div>
+       <div class="fld"><label>From</label><input id="jt_start" type="date" value="${esc(String(x.start_date||'').slice(0,10))}"></div>
+       <div class="fld"><label>To</label><input id="jt_end" type="date" value="${esc(String(x.end_date||'').slice(0,10))}"></div></div>
+     <div class="fld"><label>Notes</label><input id="jt_notes" value="${esc(x.notes||'')}" placeholder="e.g. nights only, driving the van"></div>
+     <div class="muted" style="font-size:12px">Not in the list? Add them under Engineers (or as an agency engineer under Suppliers).</div>`,
+    `<button class="btn-ghost" onclick="el('jtModal').remove()">Cancel</button><button class="btn" id="jtSave" onclick="jobTeamSave('${jobId}',${rowId?`'${rowId}'`:'null'})">${rowId?'Save':'Add to team'}</button>`);
+}
+async function jobTeamSave(jobId,rowId){
+  const v=k=>el(k).value.trim(); const worker=rowId?null:v('jt_worker');
+  if(!rowId && !worker) return billSay('jtModal','Choose the person.');
+  const row={role:v('jt_role')||'Engineer', start_date:v('jt_start')||null, end_date:v('jt_end')||null, notes:v('jt_notes')||null};
+  if(row.start_date && row.end_date && row.end_date<row.start_date) return billSay('jtModal','The end date is before the start date.');
+  // clash check: the same person on another job for overlapping dates
+  let wid=worker; if(rowId){ const r0=await sb.from('job_team').select('worker_id').eq('id',rowId).single(); wid=r0.data&&r0.data.worker_id; }
+  const o=await sb.from('job_team').select('job_id,start_date,end_date').eq('worker_id',wid).is('removed_at',null).neq('job_id',jobId);
+  const c=(o.data||[]).filter(x=>overlaps(row.start_date,row.end_date,x.start_date,x.end_date));
+  if(c.length && !confirm(`${teamWorkerName(wid)} is already on ${c.map(x=>{ const oj=jobById(x.job_id); return (oj?oj.job_ref:'another job')+(x.start_date?' ('+jobDate(x.start_date)+(x.end_date?' – '+jobDate(x.end_date):'')+')':''); }).join(', ')}.\n\nAdd them to this job anyway?`)) return;
+  el('jtSave').disabled=true;
+  const r=rowId?await sb.from('job_team').update(row).eq('id',rowId).select():await sb.from('job_team').insert({...row, job_id:jobId, worker_id:worker}).select();
+  if(r.error||!r.data||!r.data.length){ el('jtSave').disabled=false; return billSay('jtModal','Not saved: '+(r.error?r.error.message:'no permission')); }
+  el('jtModal').remove(); jobLoadTeam(jobById(jobId));
+}
+async function jobTeamRemove(jobId,rowId){
+  const reason=prompt('Remove this person from the job? It stays on record.\n\nReason:'); if(reason===null) return;
+  if(!reason.trim()){ alert('A reason is needed.'); return; }
+  const r=await sb.from('job_team').update({removed_at:new Date().toISOString(), remove_reason:reason.trim()}).eq('id',rowId).select();
+  if(r.error||!r.data||!r.data.length){ alert('Not removed: '+(r.error?r.error.message:'no permission')); return; }
+  jobLoadTeam(jobById(jobId));
+}
+function jobTeamCopyForm(jobId){
+  const j=jobById(jobId);
+  const others=(JOBREG||[]).filter(x=>x.id!==jobId && !x.archived_at);
+  billModal('jtCopy',`Copy team · ${esc(j.job_ref)}`,
+    `<div class="fld"><label>Copy everyone currently on</label><select id="jc_job"><option value="">— choose a job —</option>${others.map(x=>`<option value="${x.id}">${esc(x.job_ref+' — '+x.title)}</option>`).join('')}</select></div>
+     <div class="muted" style="font-size:12.5px">They’re added with the same roles and this job’s dates${j.start_date?` (${jobDate(j.start_date)}${j.end_date?' – '+jobDate(j.end_date):''})`:''}. People already on this job are skipped. You’ll be warned about anyone booked elsewhere for those dates.</div>`,
+    `<button class="btn-ghost" onclick="el('jtCopy').remove()">Cancel</button><button class="btn" onclick="jobTeamCopy('${jobId}')">Copy team</button>`);
+}
+async function jobTeamCopy(jobId){
+  const from=el('jc_job').value; if(!from) return billSay('jtCopy','Choose a job.');
+  const j=jobById(jobId);
+  const [src,mine]=await Promise.all([sb.from('job_team').select('worker_id,role').eq('job_id',from).is('removed_at',null), sb.from('job_team').select('worker_id').eq('job_id',jobId).is('removed_at',null)]);
+  const have=new Set((mine.data||[]).map(x=>x.worker_id));
+  const add=(src.data||[]).filter(x=>!have.has(x.worker_id));
+  if(!add.length) return billSay('jtCopy','Nobody to copy — everyone is already on this job, or that job has no team.');
+  const r=await sb.from('job_team').insert(add.map(x=>({job_id:jobId, worker_id:x.worker_id, role:x.role, start_date:j.start_date||null, end_date:j.end_date||null}))).select();
+  if(r.error) return billSay('jtCopy','Not copied: '+r.error.message);
+  el('jtCopy').remove(); jobLoadTeam(j);
+}
+
+/* ---------- Mobilisation ---------- */
+async function jobLoadMobilisation(j){
+  const box=el('jobMob'); if(!box) return;
+  const [t,a,p]=await Promise.all([
+    sb.from('job_team').select('id').eq('job_id',j.id).is('removed_at',null),
+    sb.from('commercial_attachments').select('doc_type').eq('job_id',j.id).is('archived_at',null),
+    jobCan('po.view')?sb.from('purchase_orders').select('status').eq('job_id',j.id):Promise.resolve({data:[]})]);
+  const m=j.mobilisation||{}, checks=Array.isArray(m.checks)?m.checks:[];
+  const teamN=(t.data||[]).length, rams=(a.data||[]).some(x=>['rams','method_statement'].includes(x.doc_type));
+  const posIssued=(p.data||[]).some(x=>['open','part_invoiced','completed'].includes(x.status));
+  const auto=[
+    ['Start date confirmed', !!j.start_date, j.start_date?jobDate(j.start_date):'Set it on the Overview tab'],
+    ['Team allocated', teamN>0, teamN?teamN+' on the Team tab':'Add people on the Team tab'],
+    ['RAMS / method statement attached', rams, rams?'On the Attachments tab':'Attach it on the Attachments tab (type RAMS or Method statement)'],
+    ['Materials / plant POs issued', posIssued||!!m.pos_not_needed, posIssued?'POs issued':(m.pos_not_needed?'Marked not needed':'Raise POs on the Costs & POs tab')]];
+  const all=[...auto.map(x=>x[1]), ...checks.map(c=>!!c.done)];
+  const ready=all.every(Boolean);
+  const can=jobCan('jobs.edit') && !j.archived_at;
+  box.innerHTML=`<div class="box" style="background:${ready?'var(--green-soft)':'var(--amber-soft)'};border-radius:10px;padding:10px 12px;font-size:13px;margin-bottom:10px"><b>${ready?'✓ Ready to start':'Not ready yet'}</b> — ${all.filter(Boolean).length} of ${all.length} in place</div>
+    <div class="card" style="padding:6px 8px"><table class="tbl"><tbody>
+      ${auto.map((x,i)=>`<tr><td style="width:28px;font-size:16px">${x[1]?'✅':'⬜'}</td><td><b>${esc(x[0])}</b><div class="muted" style="font-size:12px">${esc(x[2])}</div></td><td style="text-align:right">${i===3&&can&&!posIssued?`<label style="font-size:12.5px;display:inline-flex;gap:6px;align-items:center"><input type="checkbox" style="width:auto" ${m.pos_not_needed?'checked':''} onchange="jobMobSet('${j.id}',{pos_not_needed:this.checked})"> Not needed</label>`:''}</td></tr>`).join('')}
+      ${checks.map((c,i)=>`<tr><td style="width:28px"><input type="checkbox" style="width:auto" ${c.done?'checked':''} ${can?'':'disabled'} onchange="jobMobToggle('${j.id}',${i},this.checked)"></td><td>${esc(c.label)}</td><td style="text-align:right">${can?`<button class="btn-ghost" style="padding:3px 8px;color:var(--red)" onclick="jobMobRemove('${j.id}',${i})">✕</button>`:''}</td></tr>`).join('')}
+    </tbody></table>
+    ${can?`<div style="display:flex;gap:8px;padding:8px 4px"><input id="jm_new" placeholder="Add a check for this job, e.g. Permit to work, Site induction booked, Access equipment on site" style="flex:1"><button class="btn-ghost" onclick="jobMobAdd('${j.id}')">＋ Add</button></div>`:''}</div>`;
+}
+async function jobMobSave(jobId, mob){
+  const r=await sb.from('jobs').update({mobilisation:mob}).eq('id',jobId).select();
+  if(r.error||!r.data||!r.data.length){ alert('Not saved: '+(r.error?r.error.message:'no permission')); return; }
+  const i=JOBREG.findIndex(x=>x.id===jobId); if(i>=0) JOBREG[i]=r.data[0];
+  jobLoadMobilisation(JOBREG[i]);
+}
+function jobMob(jobId){ const j=jobById(jobId); const m=JSON.parse(JSON.stringify(j.mobilisation||{})); if(!Array.isArray(m.checks)) m.checks=[]; return m; }
+function jobMobSet(jobId,patch){ jobMobSave(jobId,{...jobMob(jobId),...patch}); }
+function jobMobToggle(jobId,i,on){ const m=jobMob(jobId); if(m.checks[i]) m.checks[i].done=on; jobMobSave(jobId,m); }
+function jobMobRemove(jobId,i){ const m=jobMob(jobId); if(!confirm(`Remove the check “${(m.checks[i]||{}).label}”?`)) return; m.checks.splice(i,1); jobMobSave(jobId,m); }
+function jobMobAdd(jobId){ const t=el('jm_new').value.trim(); if(!t) return; const m=jobMob(jobId); m.checks.push({label:t,done:false}); jobMobSave(jobId,m); }
+
+/* ---------- Reports ---------- */
+async function jobLoadReports(j){
+  const box=el('jobReports'); if(!box) return;
+  const [c,s,p]=await Promise.all([
+    sb.from('callout_reports').select('*').eq('job_id',j.id),
+    sb.from('shift_reports').select('*').eq('job_id',j.id),
+    sb.from('progress_reports').select('*').eq('job_id',j.id)]);
+  const list=[
+    ...(c.data||[]).map(r=>({type:'Call-out',page:'callouts',date:r.call_date||r.submitted_at,who:r.engineer,sum:r.fault_description,extra:r.priority||'',pdf:r.pdf_url,client:r.client_id})),
+    ...(s.data||[]).map(r=>({type:'Shift',page:'shifts',date:r.shift_date||r.submitted_at,who:r.engineer,sum:r.work_completed,extra:r.shift||'',pdf:r.pdf_url,client:r.client_id})),
+    ...(p.data||[]).map(r=>({type:'Install',page:'installs',date:r.report_date||r.submitted_at,who:r.engineer,sum:r.work_completed,extra:(r.discipline||'')+(r.progress_pct!=null?' · '+Math.round(r.progress_pct)+'%':''),pdf:r.pdf_url,client:r.client_id}))]
+    .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+  box.innerHTML=`<div style="font-weight:700;margin-bottom:6px">Reports <span class="muted" style="font-weight:500;font-size:12.5px">· call-out, shift and install reports linked to this job</span></div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>Engineer</th><th>Summary</th><th></th></tr></thead><tbody>
+    ${list.map(r=>`<tr><td style="white-space:nowrap">${jobDate(String(r.date||'').slice(0,10))}</td><td>${esc(r.type)}<div class="muted" style="font-size:11.5px">${esc(r.extra)}</div></td><td>${esc(r.who||'')}</td><td style="font-size:12.5px">${esc(String(r.sum||'').slice(0,140))}</td>
+      <td style="text-align:right;white-space:nowrap">${r.pdf?`<a class="pdf-link" href="${esc(r.pdf)}" target="_blank">PDF ↗</a> `:''}<button class="btn-ghost" style="padding:4px 9px" onclick="closeForm();enterClientTo('${r.client}','${r.page}')">Open page</button></td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted" style="padding:12px">No reports linked to this job yet. Engineers will pick the job on each report from a later release; until then reports are linked to the client and site.</td></tr>'}
+    </tbody></table></div>`;
+}
+
+/* ---------- Attachments ---------- */
+const JOB_ATT_TYPES=[['rams','RAMS'],['method_statement','Method statement'],['drawing','Drawing'],['specification','Specification'],['permit','Permit'],['certificate','Certificate'],['handover','Handover / O&M'],['supplier_quote','Supplier quote'],['client_po','Client PO'],['client_confirmation','Client confirmation'],['correspondence','Correspondence'],['photo','Photo'],['other','Other']];
+let JOBATT={job:null,list:[]};
+async function jobLoadAttachments(j){
+  const box=el('jobAtts'); if(!box) return;
+  const r=await sb.from('commercial_attachments').select('*').eq('job_id',j.id).order('created_at');
+  if(r.error){ box.innerHTML=`<div class="muted">Could not load: ${esc(r.error.message)}</div>`; return; }
+  JOBATT={job:j, list:r.data||[]};
+  const can=(jobCan('quotes.create')||jobCan('costs.enter')) && !j.archived_at;
+  const label=t=>(JOB_ATT_TYPES.find(x=>x[0]===t)||[t,t])[1];
+  const row=a=>`<tr style="${a.archived_at?'opacity:.55':''}"><td>${esc(label(a.doc_type))}</td><td><b>${esc(a.title)}</b>${a.quote_id?'<div class="muted" style="font-size:11.5px">From the quote</div>':''}${a.archived_at?`<div class="muted" style="font-size:11.5px">Removed — ${esc(a.archive_reason||'')}</div>`:''}</td>
+    <td style="font-size:12px">${esc(typeof qOwnerName==='function'?qOwnerName(a.created_by):'')}<div class="muted">${jobDate(String(a.created_at||'').slice(0,10))}</div></td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn-ghost" style="padding:4px 9px" onclick="jobOpenAttachment('${a.id}')">Open</button>${can&&!a.archived_at?` <button class="btn-ghost" style="padding:4px 9px;color:var(--red)" onclick="jobRemoveAttachment('${a.id}')">Remove</button>`:''}</td></tr>`;
+  const live=JOBATT.list.filter(a=>!a.archived_at), gone=JOBATT.list.filter(a=>a.archived_at);
+  box.innerHTML=`<div style="font-weight:700;margin-bottom:6px">Attachments <span class="muted" style="font-weight:500;font-size:12.5px">· staff only · includes everything attached to the quote</span></div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><tbody>${live.map(row).join('')||'<tr><td class="muted" style="padding:12px">No attachments yet.</td></tr>'}${gone.map(row).join('')}</tbody></table>
+    ${can?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 4px">
+      <select id="ja_type" style="width:auto">${JOB_ATT_TYPES.map(t=>`<option value="${t[0]}">${esc(t[1])}</option>`).join('')}</select>
+      <input id="ja_title" placeholder="Title (optional)" style="flex:1;min-width:160px;width:auto">
+      <input id="ja_file" type="file" style="width:auto;max-width:260px">
+      <button class="btn-ghost" id="jaAdd" onclick="jobAddAttachment()">＋ Add attachment</button></div>`:''}</div>
+    <div class="savemsg" id="jaMsg"></div>`;
+}
+async function jobAddAttachment(){
+  const j=JOBATT.job, f=el('ja_file').files[0], say=t=>{ const e=el('jaMsg'); if(e) e.textContent=t; };
+  if(!f) return say('Choose a file to attach.');
+  if(f.size>25*1024*1024) return say('That file is over 25 MB.');
+  el('jaAdd').disabled=true; say('Uploading…');
+  try{
+    const meta=await qUploadCommercial(`jobs/${j.job_ref}/attachments`, f);
+    const r=await sb.from('commercial_attachments').insert({job_id:j.id, doc_type:el('ja_type').value, title:el('ja_title').value.trim()||f.name, ...meta}).select();
+    if(r.error) throw r.error;
+    jobLoadAttachments(j);
+  }catch(e){ say('Not attached: '+(e.message||e)); el('jaAdd').disabled=false; }
+}
+async function jobOpenAttachment(id){
+  const a=JOBATT.list.find(x=>x.id===id); if(!a) return;
+  if(a.file_url){ window.open(a.file_url,'_blank'); return; }
+  const w=window.open('about:blank','_blank');
+  const r=await sb.storage.from('commercial').createSignedUrl(a.storage_path, 120);
+  if(r.error||!r.data){ if(w) w.close(); alert('Could not open: '+(r.error?r.error.message:'')); return; }
+  if(w) w.location.href=r.data.signedUrl; else window.open(r.data.signedUrl,'_blank');
+}
+async function jobRemoveAttachment(id){
+  const reason=prompt('Remove this attachment? It stays on record but is hidden from the list.\n\nReason:'); if(reason===null) return;
+  if(!reason.trim()){ alert('A reason is needed.'); return; }
+  const r=await sb.from('commercial_attachments').update({archived_at:new Date().toISOString(), archive_reason:reason.trim()}).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length){ alert('Not removed: '+(r.error?r.error.message:'no permission')); return; }
+  jobLoadAttachments(JOBATT.job);
 }
 </script>
 </body>
