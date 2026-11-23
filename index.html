@@ -746,6 +746,7 @@ function renderShell(){
       ${nb('risks','⚠','Risk Register')}
       ${nl('💷 Purchasing &amp; Finance')}
       ${nb('poreg','🧾','Purchase Orders')}
+      ${nb('suppinv','📑','Supplier Invoices')}
       ${nb('commercial','📊','Commercial')}
       ${nb('xero','🔄','Send to Xero')}
       ${nl('👷 People &amp; Suppliers')}
@@ -5146,6 +5147,7 @@ function go(page){
     else if(page==='requests')html=pageRequests();
     else if(page==='quotes')html=pageQuotes();
     else if(page==='qrequests')html=pageQuoteRequests();
+    else if(page==='suppinv')html=pageSupplierInvoices();
     else if(page==='analytics')html=pageAnalytics();
     else if(page==='documents')html=pageDocuments();
     else if(page==='notify')html=pageNotify();
@@ -6167,7 +6169,7 @@ async function qHistory(){
    =================================================================== */
 
 let POS=null, POS_ERR=null, POS_LOADING=false, SUPPLIERS_ALL=[], PO_JOBS=[];
-let PO_F={status:'open', supplier:'all', q:''};
+let PO_F={status:'all', supplier:'all', q:''};
 let PEDIT=null;   // {p, lines, invoices}
 
 TITLES.poreg='Purchase orders';
@@ -6194,7 +6196,7 @@ async function poEnsurePerms(){
 async function poLoadRefs(){
   const [sup, jobs, ents, codes] = await Promise.all([
     jobFetchAll(()=>sb.from('suppliers').select('*').order('name')),
-    jobFetchAll(()=>sb.from('jobs').select('id,job_ref,title,client_id,site_id,currency,entity_code,status,archived_at').order('job_ref')),
+    jobFetchAll(()=>sb.from('jobs').select('id,job_ref,title,client_id,site_id,currency,entity_code,status,archived_at,quote_id').order('job_ref')),
     sb.from('trading_entities').select('*').order('code'),
     sb.from('cost_codes').select('*').eq('active',true).order('sort_order')
   ]);
@@ -6217,28 +6219,34 @@ function poFiltered(){
   const f=PO_F, q=f.q.trim().toLowerCase();
   return (POS||[]).filter(p=>{
     if(f.status==='open' && !['draft','open','part_invoiced'].includes(p.status)) return false;
-    if(f.status!=='open' && f.status!=='all' && p.status!==f.status) return false;
+    if(f.status==='live' && !['open','part_invoiced'].includes(p.status)) return false;
+    if(f.status==='overdue' && !poOverdue(p)) return false;
+    if(!['open','all','live','overdue'].includes(f.status) && p.status!==f.status) return false;
     if(f.supplier!=='all' && p.supplier_id!==f.supplier) return false;
     const j=poJob(p.job_id);
     if(q && ![p.po_ref,p.description,poSupplier(p.supplier_id).name,j.title,jobClientName(j.client_id)].some(v=>String(v||'').toLowerCase().includes(q))) return false;
     return true;
   });
 }
+function poOverdue(p){ return ['open','part_invoiced'].includes(p.status) && p.required_by && String(p.required_by).slice(0,10)<ymd(new Date()); }
 function poSetFilter(k,v){ PO_F[k]=v; const t=el('poTable'); if(t){ t.innerHTML=poTableHtml(); const c=el('poCount'); if(c) c.textContent=poFiltered().length; } else go('poreg'); }
 
 function poTableHtml(rows){
   rows=rows||poFiltered();
   if(!rows.length) return `<div class="empty" style="padding:26px"><div class="big">🧾</div><b>No purchase orders match</b><div style="margin-top:6px;font-size:13px">${(POS||[]).length?'Try a different filter.':'Raise a PO from a job, or with “＋ New PO”.'}</div></div>`;
-  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>PO number</th><th>Supplier</th><th>For</th><th>Status</th><th style="text-align:right">Ordered</th><th style="text-align:right">Invoiced</th><th style="text-align:right">Still to invoice</th><th></th></tr></thead><tbody>${
+  const canInv=jobCan('costs.enter');
+  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>PO number</th><th>Supplier</th><th>For</th><th>Status</th><th>Created</th><th>Required by</th><th style="text-align:right">Ordered</th><th style="text-align:right">Invoiced</th><th style="text-align:right">Still to invoice</th><th></th></tr></thead><tbody>${
     rows.map(p=>{ const j=poJob(p.job_id); const left=['open','part_invoiced'].includes(p.status)?Math.max(Number(p.total)-Number(p.invoiced),0):0;
       return `<tr><td style="white-space:nowrap"><b>${esc(p.po_ref)}</b></td>
       <td>${esc(poSupplier(p.supplier_id).name||'—')}</td>
       <td>${esc(p.description)}<div class="muted" style="font-size:11.5px">${esc(j.title||'')}${j.client_id?' · '+esc(jobClientName(j.client_id)):''}</div></td>
       <td>${poStatusChip(p.status)}</td>
+      <td style="white-space:nowrap">${jobDate(String(p.created_at||'').slice(0,10))}</td>
+      <td style="white-space:nowrap;${poOverdue(p)?'color:var(--red);font-weight:700':''}">${p.required_by?jobDate(p.required_by):'—'}${poOverdue(p)?' · overdue':''}</td>
       <td style="text-align:right;white-space:nowrap">${jobMoney(p.total,p.currency)}</td>
       <td style="text-align:right;white-space:nowrap">${jobMoney(p.invoiced,p.currency)}</td>
       <td style="text-align:right;white-space:nowrap">${left?jobMoney(left,p.currency):'—'}</td>
-      <td><button class="btn-ghost" style="padding:5px 10px" onclick="openPO('${p.id}')">Open</button></td></tr>`; }).join('')}</tbody></table></div>`;
+      <td style="white-space:nowrap;text-align:right"><button class="btn-ghost" style="padding:5px 10px" onclick="openPO('${p.id}')">Open</button>${canInv&&['open','part_invoiced'].includes(p.status)?` <button class="btn" style="padding:5px 10px;width:auto" onclick="poInvoiceNow('${p.id}')">Invoice</button>`:''}</td></tr>`; }).join('')}</tbody></table></div>`;
 }
 
 function pagePOs(){
@@ -6248,12 +6256,16 @@ function pagePOs(){
   if(!jobCan('po.view')) return emptyState('🔒','No access to purchase orders','Your staff role does not include purchasing. Ask a Director.');
   const n=s=>(POS||[]).filter(p=>p.status===s).length;
   const header=`<div class="sechead"><h3>🧾 Purchase orders</h3><span class="sub">Every PO belongs to a job · <span id="poCount">${poFiltered().length}</span> shown</span><span class="line"></span>${jobCan('po.create')?`<button class="addbtn" onclick="openPO()">＋ New PO</button>`:''}</div>`;
-  const kpis=`<div class="grid kpis" style="margin-bottom:14px">${kpi('','✏️','Drafts',n('draft'))}${kpi('','📤','Open',n('open'))}${kpi('','🧩','Part invoiced',n('part_invoiced'))}${kpi('','✅','Completed',n('completed'))}</div>`;
+  const liveP=(POS||[]).filter(p=>['open','part_invoiced'].includes(p.status));
+  const by={}; liveP.forEach(p=>{ by[p.currency]=(by[p.currency]||0)+Math.max(Number(p.total)-Number(p.invoiced),0); });
+  const left=Object.keys(by).sort().map(c=>jobMoney(by[c],c).replace(/\.00$/,'')).join(' · ')||'—';
+  const tile=(ic,l,v,st,sub)=>`<div class="card kpi kpi-link" role="button" tabindex="0" onclick="PO_F.status='${st}';go('poreg')"><div class="spark">${ic}</div><div class="lbl">${l}</div><div class="val"${String(v).length>8?' style="font-size:19px"':''}>${v}</div>${sub?`<div class="muted" style="font-size:12px;margin-top:2px">${sub}</div>`:''}<div class="kpi-go">→</div></div>`;
+  const kpis=`<div class="grid kpis" style="margin-bottom:14px">${tile('📤','Open POs',liveP.length,'live')}${tile('💷','Still to be invoiced',left,'live','Ordered, not yet invoiced')}${tile('⏰','Overdue delivery',(POS||[]).filter(poOverdue).length,'overdue','Past required-by and still open')}${tile('✏️','Drafts not issued',n('draft'),'draft')}</div>`;
   const opt=(v,l,cur)=>`<option value="${esc(v)}" ${v===cur?'selected':''}>${esc(l)}</option>`;
   const supIds=[...new Set((POS||[]).map(p=>p.supplier_id))];
   const filters=`<div class="card fld" style="padding:12px 14px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
     <input placeholder="Search PO number, supplier, job, client…" value="${esc(PO_F.q)}" oninput="poSetFilter('q',this.value)" style="flex:1;min-width:200px;width:auto">
-    <select style="width:auto" onchange="poSetFilter('status',this.value)">${opt('open','Open and drafts',PO_F.status)}${PO_STATUSES.map(s=>opt(s[0],s[1],PO_F.status)).join('')}${opt('all','All',PO_F.status)}</select>
+    <select style="width:auto" onchange="poSetFilter('status',this.value)">${opt('all','All',PO_F.status)}${opt('open','Open and drafts',PO_F.status)}${opt('live','Open (issued, not fully invoiced)',PO_F.status)}${opt('overdue','Overdue delivery',PO_F.status)}${PO_STATUSES.map(s=>opt(s[0],s[1],PO_F.status)).join('')}</select>
     <select style="width:auto" onchange="poSetFilter('supplier',this.value)">${opt('all','All suppliers',PO_F.supplier)}${supIds.map(id=>opt(id,poSupplier(id).name||'—',PO_F.supplier)).join('')}</select></div>`;
   return header+kpis+filters+`<div class="card" id="poTable">${poTableHtml()}</div>`;
 }
@@ -6275,7 +6287,8 @@ async function openPO(id, jobId){
   let invLines=[];
   const invIds=(i.data||[]).map(x=>x.id);
   if(invIds.length){ const r=await sb.from('supplier_invoice_lines').select('*').in('invoice_id',invIds); invLines=r.data||[]; }
-  PEDIT={p:p.data, lines:(l.data||[]).map(x=>({...x})), origLineIds:(l.data||[]).map(x=>x.id), invoices:i.data||[], invLines};
+  const at=await sb.from('commercial_attachments').select('*').eq('po_id',id).order('created_at');
+  PEDIT={p:p.data, lines:(l.data||[]).map(x=>({...x})), origLineIds:(l.data||[]).map(x=>x.id), invoices:i.data||[], invLines, atts:at.error?[]:(at.data||[])};
   const k=(POS||[]).findIndex(x=>x.id===id); if(k>=0) POS[k]=p.data;
   renderPOModal();
 }
@@ -6316,12 +6329,13 @@ function renderPOModal(){
   const openJobs=PO_JOBS.filter(x=>!x.archived_at && !['closed','cancelled'].includes(x.status));
   const sup=poSupplier(p.supplier_id);
   const lines=PEDIT.lines.map((l,i)=>poLineRow(l,i,ed,cur)).join('')||`<tr><td colspan="7" class="muted" style="padding:14px">No lines yet${ed?' — add the first one below.':'.'}</td></tr>`;
-  const inv=(PEDIT.invoices||[]).map(x=>{ const ls=(PEDIT.invLines||[]).filter(l=>l.invoice_id===x.id).map(l=>`${esc(l.cost_code)} ${jobMoney(l.amount,cur)}`).join(', ');
-    return `<tr${x.status==='void'?' style="opacity:.55;text-decoration:line-through"':''}><td>${esc(x.invoice_no)}</td><td>${jobDate(x.invoice_date)}</td><td>${ls}</td><td style="text-align:right">${jobMoney(x.net_amount,cur)}</td><td>${x.status==='void'?'Void: '+esc(x.void_reason||''):(jobCan('costs.enter')?`<button class="btn-ghost" style="padding:3px 8px" onclick="poVoidInvoice('${x.id}')">Void</button>`:'')}</td></tr>`; }).join('');
+  const inv=(PEDIT.invoices||[]).map(x=>{ const ls=(PEDIT.invLines||[]).filter(l=>l.invoice_id===x.id).map(l=>{ const pl=PEDIT.lines.find(y=>y.id===l.po_line_id); return `${esc(pl?pl.description:l.cost_code)} ${jobMoney(l.amount,cur)}`; }).join('<br>');
+    const pdf=(PEDIT.atts||[]).find(a=>a.supplier_invoice_id===x.id && !a.archived_at);
+    return `<tr${x.status==='void'?' style="opacity:.55;text-decoration:line-through"':''}><td>${esc(x.invoice_no)}</td><td>${jobDate(x.invoice_date)}</td><td style="font-size:12.5px">${ls}</td><td style="text-align:right">${jobMoney(x.net_amount,cur)}${x.vat_amount!=null?`<div class="muted" style="font-size:11px">VAT ${jobMoney(x.vat_amount,cur)}</div>`:''}</td><td style="white-space:nowrap">${pdf?`<button class="btn-ghost" style="padding:3px 8px" onclick="poOpenAttachment('${pdf.id}')">PDF</button> `:''}${x.status==='void'?'Void: '+esc(x.void_reason||''):(jobCan('costs.enter')?`<button class="btn-ghost" style="padding:3px 8px" onclick="poVoidInvoice('${x.id}')">Void</button>`:'')}</td></tr>`; }).join('');
   const b=[];
   if(!isNew && p.status!=='draft') b.push(`<button class="btn-ghost" onclick="poDownloadPdf()">⬇ PDF</button>`);
   if(!isNew && p.status==='draft' && PEDIT.lines.length) b.push(`<button class="btn-ghost" onclick="poPreviewPdf()">Preview PDF</button>`);
-  if(!isNew && ['open','part_invoiced','completed'].includes(p.status) && jobCan('costs.enter')) b.push(`<button class="btn" onclick="poInvoiceForm()">＋ Record invoice</button>`);
+  if(!isNew && ['open','part_invoiced','completed'].includes(p.status) && jobCan('costs.enter')) b.push(`<button class="btn" onclick="poInvoiceForm()">Invoice now</button>`);
   if(!isNew && ['open','part_invoiced'].includes(p.status) && jobCan('po.create')) b.push(`<button class="btn-ghost" onclick="poClose()">Close PO</button>`);
   if(!isNew && ['draft','open'].includes(p.status) && Number(p.invoiced)===0 && jobCan('po.create')) b.push(`<button class="btn-ghost" style="color:var(--red)" onclick="poCancel()">Cancel PO</button>`);
   if(!isNew && jobCan('history.view')) b.push(`<button class="btn-ghost" onclick="poHistory()">History</button>`);
@@ -6353,13 +6367,15 @@ function renderPOModal(){
       </div>
       <div style="margin:6px 0 4px;font-weight:700">Lines</div>
       <div class="card fld" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead>${ed?'<tr><th>Code</th><th>Description</th><th>Qty</th><th>Unit</th><th>Unit cost</th><th style="text-align:right">Line total</th><th></th></tr>':'<tr><th>Code</th><th>Description</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit cost</th><th style="text-align:right">Total</th></tr>'}</thead><tbody id="poLines">${lines}</tbody></table>
-        ${ed?`<div style="padding:8px 4px"><button class="btn-ghost" onclick="poAddLine()">＋ Add line</button></div>`:''}
+        ${ed?`<div style="padding:8px 4px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn-ghost" onclick="poAddLine()">＋ Add line</button>${jobCan('margins.view')?`<button class="btn-ghost" id="poFromQuoteBtn" onclick="poFromQuote()">＋ Lines from the job’s quote</button>`:''}</div>`:''}
         <div id="poTotal">${ed?poTotalHtml():`<div style="text-align:right;padding:10px 4px;font-size:14px">Ordered <b>${jobMoney(p.total,cur)}</b> · invoiced <b>${jobMoney(p.invoiced,cur)}</b>${['open','part_invoiced'].includes(p.status)?` · still to invoice <b>${jobMoney(Math.max(p.total-p.invoiced,0),cur)}</b>`:''}</div>`}</div></div>
       <div class="frow" style="margin-top:12px">
         <div class="fld"><label>Notes for the supplier (printed)</label><textarea id="pe_snotes" ${dis} rows="2">${esc(p.supplier_notes||'')}</textarea></div>
         <div class="fld"><label>Internal notes</label><textarea id="pe_inotes" rows="2" ${jobCan('po.create')?'':'disabled'}>${esc(p.internal_notes||'')}</textarea></div>
       </div>
-      ${!isNew&&p.status!=='draft'?`<div style="margin:10px 0 4px;font-weight:700">Supplier invoices</div><div class="card" style="padding:6px 8px"><table class="tbl"><thead><tr><th>Invoice</th><th>Date</th><th>Cost codes</th><th style="text-align:right">Net</th><th></th></tr></thead><tbody>${inv||'<tr><td colspan="5" class="muted">None entered yet.</td></tr>'}</tbody></table></div>`:''}
+      ${!isNew&&p.status!=='draft'?`<div style="margin:10px 0 4px;font-weight:700">Supplier invoices</div><div class="card" style="padding:6px 8px"><table class="tbl"><thead><tr><th>Invoice</th><th>Date</th><th>Against</th><th style="text-align:right">Net</th><th></th></tr></thead><tbody>${inv||'<tr><td colspan="5" class="muted">None entered yet.</td></tr>'}</tbody></table></div>`:''}
+      ${(PEDIT.pendingAtts||[]).length?`<div class="muted" style="font-size:12.5px;margin-top:8px">📎 ${PEDIT.pendingAtts.length} supplier quote(s) from the job’s quote will be linked to this PO when it’s saved.</div>`:''}
+      ${!isNew?`<div id="poAttBox">${poAttachmentsHtml()}</div>`:''}
     </div>
     <div class="modal-foot" style="flex-wrap:wrap">${b.join('')}</div>
     <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
@@ -6406,6 +6422,10 @@ async function savePO(issue){
       msg('Issued. Saving the PDF…');
       const path=await poMakeAndStorePdf(saved);
       if(path){ const r4=await sb.from('purchase_orders').update({pdf_path:path}).eq('id',saved.id).select(); if(!r4.error&&r4.data&&r4.data.length) saved=r4.data[0]; }
+    }
+    if((PEDIT.pendingAtts||[]).length){
+      const rows=PEDIT.pendingAtts.map(a=>({po_id:saved.id, job_id:saved.job_id, doc_type:a.doc_type, title:a.title, note:'From the job’s quote', storage_path:a.storage_path, file_url:a.file_url, file_name:a.file_name, mime_type:a.mime_type, size_bytes:a.size_bytes}));
+      const ra=await sb.from('commercial_attachments').insert(rows); if(ra.error) console.warn('link quote attachments',ra.error); else PEDIT.pendingAtts=[];
     }
     const k=(POS||[]).findIndex(x=>x.id===saved.id); if(k>=0) POS[k]=saved; else if(POS) POS.unshift(saved);
     msg(issue?`✓ ${saved.po_ref} issued.`:`✓ Saved ${saved.po_ref}.`,'ok');
@@ -6517,47 +6537,146 @@ async function poCancel(){
 }
 
 /* ---------- supplier invoices ---------- */
+async function poInvoiceNow(id){ await openPO(id); poInvoiceForm(); }
+// Allocation per PO line: ordered, invoiced so far (by line), left
+function poLineLeft(){
+  const live=(PEDIT.invoices||[]).filter(i=>i.status!=='void').map(i=>i.id);
+  const byLine={}, legacy={};
+  (PEDIT.invLines||[]).filter(l=>live.includes(l.invoice_id)).forEach(l=>{
+    if(l.po_line_id) byLine[l.po_line_id]=(byLine[l.po_line_id]||0)+Number(l.amount);
+    else legacy[l.cost_code]=(legacy[l.cost_code]||0)+Number(l.amount); });
+  return {byLine, legacy};
+}
 function poInvoiceForm(){
-  const p=PEDIT.p, cur=p.currency;
-  // what is still to invoice, by cost code
-  const byCode={};
-  PEDIT.lines.forEach(l=>{ byCode[l.cost_code]=(byCode[l.cost_code]||0)+Number(l.line_total); });
-  (PEDIT.invoices||[]).filter(i=>i.status!=='void').forEach(i=>(PEDIT.invLines||[]).filter(l=>l.invoice_id===i.id).forEach(l=>{ byCode[l.cost_code]=(byCode[l.cost_code]||0)-Number(l.amount); }));
-  const codes=Object.keys(byCode);
-  const rows=codes.map(c=>`<tr><td>${esc(c)}</td><td style="text-align:right">${jobMoney(Math.max(byCode[c],0),cur)}</td><td><input class="inv-amt" data-code="${esc(c)}" type="number" step="0.01" style="width:130px" placeholder="0.00"></td></tr>`).join('');
+  const p=PEDIT.p, cur=p.currency, {byLine,legacy}=poLineLeft();
+  const rows=PEDIT.lines.map(l=>{ const done=byLine[l.id]||0, left=Number(l.line_total)-done;
+    return `<tr><td><b>${esc(l.description)}</b><div class="muted" style="font-size:11.5px">${esc(l.cost_code)} · ${esc(String(Number(l.quantity)))}${l.unit?' '+esc(l.unit):''} × ${jobMoney(l.unit_cost,cur)}</div></td>
+      <td style="text-align:right;white-space:nowrap">${jobMoney(l.line_total,cur)}</td><td style="text-align:right;white-space:nowrap">${jobMoney(done,cur)}</td>
+      <td style="text-align:right;white-space:nowrap;${left<-0.005?'color:var(--red)':''}">${jobMoney(left,cur)}</td>
+      <td style="white-space:nowrap"><input class="inv-line" data-line="${l.id}" data-left="${left}" type="number" step="0.01" style="width:120px" placeholder="0.00" oninput="poInvTotals()"> <button class="btn-ghost" style="padding:3px 7px" title="Fill what is left" onclick="const i=this.previousElementSibling;i.value=${Math.max(left,0).toFixed(2)};poInvTotals()">All</button></td></tr>`; }).join('');
+  const leg=Object.keys(legacy).length?`<div class="muted" style="font-size:12px;margin-top:6px">Earlier invoices on this PO were entered by cost code (${Object.keys(legacy).map(c=>c+' '+jobMoney(legacy[c],cur)).join(', ')}), so they aren’t shown against individual lines.</div>`:'';
   const box=document.createElement('div'); box.className='modal-bg'; box.id='invModal'; box.style.zIndex=1001;
-  box.innerHTML=`<div class="modal" style="max-width:640px"><div class="modal-h"><h3>Record supplier invoice · ${esc(p.po_ref)}</h3><button class="modal-x" onclick="el('invModal').remove()">✕</button></div>
+  box.innerHTML=`<div class="modal" style="max-width:900px;width:96vw"><div class="modal-h"><h3>Enter supplier invoice · ${esc(p.po_ref)} · ${esc(poSupplier(p.supplier_id).name||'')}</h3><button class="modal-x" onclick="el('invModal').remove()">✕</button></div>
     <div class="modal-b fld">
-      <div class="frow"><div class="fld"><label>Supplier invoice number <span class="req">*</span></label><input id="iv_no"></div>
-      <div class="fld"><label>Invoice date <span class="req">*</span></label><input id="iv_date" type="date" value="${ymd(new Date())}"></div></div>
-      <div style="font-weight:700;margin:6px 0">Net amount by cost code (${esc(cur)}, excluding VAT)</div>
-      <table class="tbl"><thead><tr><th>Code</th><th style="text-align:right">Still to invoice</th><th>This invoice</th></tr></thead><tbody>${rows}</tbody></table>
-      <div class="frow" style="margin-top:10px"><div class="fld"><label>VAT on the invoice (for reference)</label><input id="iv_vat" type="number" step="0.01" min="0"></div>
-      <div class="fld"><label>Note</label><input id="iv_note"></div></div>
-      <div class="muted" style="font-size:12px">A credit note can be entered as a negative amount.</div>
+      <div class="frow"><div class="fld"><label>Supplier’s invoice number <span class="req">*</span></label><input id="iv_no"></div>
+        <div class="fld"><label>Invoice date <span class="req">*</span></label><input id="iv_date" type="date" value="${ymd(new Date())}"></div>
+        <div class="fld"><label>Invoice PDF</label><input id="iv_file" type="file" accept="application/pdf,image/*"></div></div>
+      <div style="display:flex;align-items:center;gap:8px;margin:8px 0 6px"><b style="flex:1">What this invoice covers (${esc(cur)}, excluding VAT)</b><button class="btn-ghost" style="padding:4px 10px" onclick="document.querySelectorAll('.inv-line').forEach(i=>{ i.value=Math.max(Number(i.dataset.left),0).toFixed(2); });poInvTotals()">Invoice everything left</button></div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>PO line</th><th style="text-align:right">Ordered</th><th style="text-align:right">Invoiced so far</th><th style="text-align:right">Left</th><th>This invoice</th></tr></thead><tbody>${rows}</tbody></table></div>${leg}
+      <div class="frow" style="margin-top:10px"><div class="fld"><label>Net (from the lines)</label><input id="iv_net" disabled></div>
+        <div class="fld"><label>VAT</label><input id="iv_vat" type="number" step="0.01" min="0" oninput="poInvTotals()"></div>
+        <div class="fld"><label>Total</label><input id="iv_tot" disabled></div></div>
+      <div class="fld"><label>Note</label><input id="iv_note" placeholder="Optional"></div>
+      <div class="muted" style="font-size:12px">Each amount goes against its PO line’s cost code on the job. A credit note can be entered as a negative amount.</div>
     </div>
     <div class="modal-foot"><button class="btn-ghost" onclick="el('invModal').remove()">Cancel</button><button class="btn" id="ivSave" onclick="poSaveInvoice()">Save invoice</button></div>
     <div class="savemsg" id="invMsg" style="padding:0 18px 14px"></div></div>`;
   document.body.appendChild(box);
-  PEDIT.invLeft=byCode;
+  poInvTotals();
+}
+function poInvTotals(){
+  const cur=PEDIT.p.currency; let net=0; document.querySelectorAll('.inv-line').forEach(i=>net+=Number(i.value||0));
+  const vat=Number((el('iv_vat')||{}).value||0);
+  if(el('iv_net')) el('iv_net').value=jobMoney(Math.round(net*100)/100,cur);
+  if(el('iv_tot')) el('iv_tot').value=jobMoney(Math.round((net+vat)*100)/100,cur);
 }
 async function poSaveInvoice(){
   const p=PEDIT.p, say=t=>{ el('invMsg').textContent=t; };
   const no=el('iv_no').value.trim(), date=el('iv_date').value;
   if(!no) return say('Enter the supplier’s invoice number.'); if(!date) return say('Enter the invoice date.');
-  const lines=[...document.querySelectorAll('.inv-amt')].map(i=>({cost_code:i.dataset.code, amount:Number(i.value||0)})).filter(l=>l.amount!==0);
-  if(!lines.length) return say('Enter the amount against at least one cost code.');
-  const over=lines.filter(l=>l.amount>(PEDIT.invLeft[l.cost_code]||0)+0.005);
-  if(over.length && !confirm(`This invoice is more than what is left on the PO for ${over.map(o=>o.cost_code).join(', ')}. Save it anyway?`)) return;
-  const b=el('ivSave'); b.disabled=true;
+  const lines=[...document.querySelectorAll('.inv-line')].map(i=>({po_line_id:i.dataset.line, amount:Math.round(Number(i.value||0)*100)/100, left:Number(i.dataset.left)})).filter(l=>l.amount!==0);
+  if(!lines.length) return say('Enter the amount against at least one PO line.');
+  const over=lines.filter(l=>l.amount>l.left+0.005);
+  if(over.length && !confirm(`This invoice is more than what is left on ${over.length} PO line${over.length>1?'s':''}. Save it anyway?`)) return;
+  const f=el('iv_file').files[0]; if(f && f.size>25*1024*1024) return say('That file is over 25 MB.');
+  const b=el('ivSave'); b.disabled=true; say('Saving…');
   const vat=el('iv_vat').value;
   const r=await sb.from('supplier_invoices').insert({po_id:p.id, invoice_no:no, invoice_date:date, vat_amount:vat===''?null:Number(vat), note:el('iv_note').value.trim()||null}).select().single();
   if(r.error){ b.disabled=false; return say('Not saved: '+poFriendlyError(r.error)); }
-  const r2=await sb.from('supplier_invoice_lines').insert(lines.map(l=>({...l, invoice_id:r.data.id}))).select();
+  const r2=await sb.from('supplier_invoice_lines').insert(lines.map(l=>({invoice_id:r.data.id, po_line_id:l.po_line_id, amount:l.amount, cost_code:(PEDIT.lines.find(x=>x.id===l.po_line_id)||{}).cost_code}))).select();
   if(r2.error){ b.disabled=false; return say('Invoice saved but its amounts were not: '+poFriendlyError(r2.error)); }
+  if(f){ try{ say('Saving the PDF…');
+      const meta=await qUploadCommercial(`purchase-orders/${p.po_ref}/invoices`, f);
+      const ra=await sb.from('commercial_attachments').insert({supplier_invoice_id:r.data.id, po_id:p.id, job_id:p.job_id, doc_type:'supplier_invoice', title:`Supplier invoice ${no}`, ...meta});
+      if(ra.error) throw ra.error;
+    }catch(e){ alert('The invoice was saved, but its PDF was not attached: '+(e.message||e)+'\nYou can add it under Attachments on the PO.'); } }
   el('invModal').remove(); await openPO(p.id); msg(`✓ Invoice ${no} recorded.`,'ok');
   if(CURRENT==='poreg'){ const t=el('poTable'); if(t) t.innerHTML=poTableHtml(); }
+  if(CURRENT==='suppinv' && typeof siReload==='function') siReload();
 }
+
+/* ---------- PO attachments ---------- */
+const PO_ATT_TYPES=[['supplier_quote','Supplier quote'],['delivery_note','Delivery note'],['drawing','Drawing'],['specification','Specification'],['correspondence','Correspondence'],['supplier_invoice','Supplier invoice'],['other','Other']];
+function poAttachmentsHtml(){
+  const p=PEDIT.p, list=(PEDIT.atts||[]);
+  const can=(jobCan('po.create')||jobCan('costs.enter')) && p.status!=='cancelled';
+  const label=t=>(PO_ATT_TYPES.find(x=>x[0]===t)||[t,typeof attTypeLabel==='function'?attTypeLabel(t):t])[1];
+  const row=a=>`<tr style="${a.archived_at?'opacity:.55':''}"><td>${esc(label(a.doc_type))}</td><td><b>${esc(a.title)}</b>${a.archived_at?`<div class="muted" style="font-size:11.5px">Removed — ${esc(a.archive_reason||'')}</div>`:''}</td><td style="font-size:12px">${jobDate(String(a.created_at||'').slice(0,10))}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn-ghost" style="padding:3px 8px" onclick="poOpenAttachment('${a.id}')">Open</button>${can&&!a.archived_at?` <button class="btn-ghost" style="padding:3px 8px;color:var(--red)" onclick="poRemoveAttachment('${a.id}')">Remove</button>`:''}</td></tr>`;
+  return `<div style="margin:12px 0 4px;font-weight:700">Attachments <span class="muted" style="font-weight:500;font-size:12px">· also shown on the job</span></div>
+    <div class="card fld" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><tbody>${list.filter(a=>!a.archived_at).map(row).join('')||'<tr><td class="muted" style="padding:10px">No attachments yet — add the supplier’s quote, delivery notes and so on.</td></tr>'}${list.filter(a=>a.archived_at).map(row).join('')}</tbody></table>
+    ${can?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 4px"><select id="pa_type" style="width:auto">${PO_ATT_TYPES.filter(t=>t[0]!=='supplier_invoice').map(t=>`<option value="${t[0]}">${esc(t[1])}</option>`).join('')}</select>
+      <input id="pa_title" placeholder="Title (optional)" style="flex:1;min-width:150px;width:auto"><input id="pa_file" type="file" style="width:auto;max-width:250px"><button class="btn-ghost" id="paAdd" onclick="poAddAttachment()">＋ Add attachment</button></div>`:''}</div>`;
+}
+async function poAddAttachment(){
+  const p=PEDIT.p, f=el('pa_file').files[0];
+  if(!f) return msg('Choose a file to attach.','err'); if(f.size>25*1024*1024) return msg('That file is over 25 MB.','err');
+  el('paAdd').disabled=true; msg('Uploading…');
+  try{ const meta=await qUploadCommercial(`purchase-orders/${p.po_ref}/attachments`, f);
+    const r=await sb.from('commercial_attachments').insert({po_id:p.id, job_id:p.job_id, doc_type:el('pa_type').value, title:el('pa_title').value.trim()||f.name, ...meta}).select();
+    if(r.error) throw r.error; PEDIT.atts=[...(PEDIT.atts||[]), ...(r.data||[])]; el('poAttBox').innerHTML=poAttachmentsHtml(); msg('✓ Attached.','ok');
+  }catch(e){ msg('Not attached: '+(e.message||e),'err'); el('paAdd').disabled=false; }
+}
+async function poOpenAttachment(id){
+  const a=(PEDIT.atts||[]).find(x=>x.id===id); if(!a) return;
+  if(a.file_url){ window.open(a.file_url,'_blank'); return; }
+  const w=window.open('about:blank','_blank');
+  const r=await sb.storage.from('commercial').createSignedUrl(a.storage_path, 120);
+  if(r.error||!r.data){ if(w) w.close(); alert('Could not open: '+(r.error?r.error.message:'')); return; }
+  if(w) w.location.href=r.data.signedUrl; else window.open(r.data.signedUrl,'_blank');
+}
+async function poRemoveAttachment(id){
+  const reason=prompt('Remove this attachment? It stays on record but is hidden from the list.\n\nReason:'); if(reason===null) return;
+  if(!reason.trim()){ alert('A reason is needed.'); return; }
+  const r=await sb.from('commercial_attachments').update({archived_at:new Date().toISOString(), archive_reason:reason.trim()}).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length){ alert('Not removed: '+(r.error?r.error.message:'no permission')); return; }
+  PEDIT.atts=(PEDIT.atts||[]).map(x=>x.id===id?r.data[0]:x); el('poAttBox').innerHTML=poAttachmentsHtml();
+}
+
+/* ---------- PO lines from the job's quote ---------- */
+async function poFromQuote(){
+  const jobId=(el('pe_job')&&el('pe_job').value)||PEDIT.p.job_id; const j=poJob(jobId);
+  if(!jobId) return msg('Choose the job first.','err');
+  if(!j.quote_id) return msg('This job wasn’t created from a quote.','err');
+  const [l,a]=await Promise.all([sb.from('quote_lines').select('*').eq('quote_id',j.quote_id).order('sort_order'),
+    sb.from('commercial_attachments').select('*').eq('quote_id',j.quote_id).eq('doc_type','supplier_quote').is('archived_at',null)]);
+  if(l.error) return msg('Could not load the quote lines: '+l.error.message,'err');
+  const lines=l.data||[], sq=a.data||[], cur=j.currency;
+  const box=document.createElement('div'); box.className='modal-bg'; box.id='pqModal'; box.style.zIndex=1001;
+  box.innerHTML=`<div class="modal" style="max-width:820px;width:96vw"><div class="modal-h"><h3>Lines from quote ${esc(j.job_ref)}</h3><button class="modal-x" onclick="el('pqModal').remove()">✕</button></div>
+    <div class="modal-b fld"><div class="muted" style="font-size:12.5px;margin-bottom:8px">Tick the lines this supplier is covering. They’re added to the PO at the quoted cost, and you can change them before issuing.</div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th></th><th>Line</th><th>Code</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit cost</th></tr></thead><tbody>
+      ${lines.map(x=>`<tr><td><input type="checkbox" class="pq_l" data-id="${x.id}" style="width:auto"></td><td>${esc(x.description)}</td><td>${esc(x.cost_code)}</td><td style="text-align:right">${esc(String(Number(x.quantity)))}${x.unit?' '+esc(x.unit):''}</td><td style="text-align:right">${jobMoney(x.unit_cost,cur)}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">The quote has no lines.</td></tr>'}</tbody></table></div>
+      ${sq.length?`<div style="margin-top:10px;font-weight:700">Supplier quotes attached to the quote</div>${sq.map(x=>`<label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0"><input type="checkbox" class="pq_a" data-id="${x.id}" style="width:auto" checked> ${esc(x.title)}</label>`).join('')}<div class="muted" style="font-size:12px">Ticked ones are linked to this PO too.</div>`:''}
+    </div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="el('pqModal').remove()">Cancel</button><button class="btn" onclick="poFromQuoteAdd()">Add to the PO</button></div></div>`;
+  document.body.appendChild(box);
+  PEDIT.quoteLines=lines; PEDIT.quoteAtts=sq;
+}
+function poFromQuoteAdd(){
+  const ids=[...document.querySelectorAll('.pq_l:checked')].map(c=>c.dataset.id), aids=[...document.querySelectorAll('.pq_a:checked')].map(c=>c.dataset.id);
+  if(!ids.length && !aids.length){ alert('Tick at least one line.'); return; }
+  // keep anything typed into the PO form before redrawing
+  const keep={supplier_id:(el('pe_sup')||{}).value, description:(el('pe_desc')||{}).value, delivery_address:(el('pe_addr')||{}).value, required_by:(el('pe_req')||{}).value, supplier_notes:(el('pe_snotes')||{}).value, internal_notes:(el('pe_inotes')||{}).value};
+  if(el('pe_job')) keep.job_id=el('pe_job').value;
+  Object.keys(keep).forEach(k=>{ if(keep[k]!==undefined) PEDIT.p[k]=keep[k]; });
+  (PEDIT.quoteLines||[]).filter(x=>ids.includes(x.id)).forEach(x=>PEDIT.lines.push({cost_code:x.cost_code, description:x.description, quantity:x.quantity, unit:x.unit||'', unit_cost:x.unit_cost}));
+  const have=new Set((PEDIT.pendingAtts||[]).map(a=>a.id));
+  PEDIT.pendingAtts=[...(PEDIT.pendingAtts||[]), ...(PEDIT.quoteAtts||[]).filter(a=>aids.includes(a.id) && !have.has(a.id))];
+  if(!PEDIT.p.description && ids.length) PEDIT.p.description=(PEDIT.quoteLines.find(x=>x.id===ids[0])||{}).description||'';
+  el('pqModal').remove(); renderPOModal();
+}
+
 async function poVoidInvoice(id){
   const inv=(PEDIT.invoices||[]).find(x=>x.id===id); const reason=prompt(`Void invoice ${inv?inv.invoice_no:''}? It stays on record but no longer counts as a cost.\n\nReason:`);
   if(reason===null) return; if(!reason.trim()){ alert('A reason is needed.'); return; }
@@ -7922,6 +8041,90 @@ async function jobRemoveAttachment(id){
   const r=await sb.from('commercial_attachments').update({archived_at:new Date().toISOString(), archive_reason:reason.trim()}).eq('id',id).select();
   if(r.error||!r.data||!r.data.length){ alert('Not removed: '+(r.error?r.error.message:'no permission')); return; }
   jobLoadAttachments(JOBATT.job);
+}
+/* ===================================================================
+   SUPPLIER INVOICES  —  release 12.
+   Every supplier invoice entered against a PO, across all jobs, in one
+   list for accounts. Invoices are entered from the PO ("Invoice now").
+   =================================================================== */
+
+let SINV=null, SINV_ERR=null, SINV_LOADING=false;
+let SINV_F={status:'entered', supplier:'all', from:'', to:'', q:''};
+TITLES.suppinv='Supplier Invoices';
+
+async function loadSupplierInvoices(){
+  if(SINV_LOADING) return; SINV_LOADING=true; SINV_ERR=null;
+  try{
+    await poEnsurePerms(); if(!SUPPLIERS_ALL.length||!PO_JOBS.length) await poLoadRefs();
+    const [inv, pos, atts]=await Promise.all([
+      jobFetchAll(()=>sb.from('supplier_invoices').select('*').order('invoice_date',{ascending:false})),
+      jobFetchAll(()=>sb.from('purchase_orders').select('id,po_ref,currency,job_id,supplier_id,status')),
+      jobFetchAll(()=>sb.from('commercial_attachments').select('id,supplier_invoice_id,storage_path,file_url,archived_at').not('supplier_invoice_id','is',null))]);
+    SINV={inv, pos:Object.fromEntries(pos.map(p=>[p.id,p])), pdf:Object.fromEntries(atts.filter(a=>!a.archived_at).map(a=>[a.supplier_invoice_id,a]))};
+  }catch(e){ SINV_ERR=e.message||String(e); SINV=null; }
+  SINV_LOADING=false;
+  if(CURRENT==='suppinv') go('suppinv');
+}
+function siReload(){ SINV=null; if(CURRENT==='suppinv') go('suppinv'); }
+function siFiltered(){
+  const f=SINV_F, q=f.q.trim().toLowerCase();
+  return (SINV.inv||[]).filter(i=>{
+    if(f.status!=='all' && i.status!==f.status) return false;
+    if(f.supplier!=='all' && i.supplier_id!==f.supplier) return false;
+    if(f.from && String(i.invoice_date)<f.from) return false;
+    if(f.to && String(i.invoice_date)>f.to) return false;
+    const po=SINV.pos[i.po_id]||{}, j=poJob(i.job_id);
+    if(q && ![i.invoice_no, po.po_ref, poSupplier(i.supplier_id).name, j.job_ref, j.title, jobClientName(j.client_id), i.note].some(v=>String(v||'').toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+function siSet(k,v){ SINV_F[k]=v; const b=el('siTable'); if(b) b.innerHTML=siTableHtml(); else go('suppinv'); }
+function siTableHtml(){
+  const rows=siFiltered();
+  if(!rows.length) return `<div class="empty" style="padding:24px"><div class="big">🧾</div><b>No supplier invoices match</b><div style="margin-top:6px;font-size:13px">Invoices are entered from the PO with <b>Invoice now</b>.</div></div>`;
+  const tot={}; rows.filter(i=>i.status==='entered').forEach(i=>{ const c=(SINV.pos[i.po_id]||{}).currency||'GBP'; tot[c]=tot[c]||{net:0,vat:0}; tot[c].net+=Number(i.net_amount||0); tot[c].vat+=Number(i.vat_amount||0); });
+  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Invoice</th><th>Supplier</th><th>PO</th><th>Job</th><th>Date</th><th style="text-align:right">Net</th><th style="text-align:right">VAT</th><th>Status</th><th></th></tr></thead><tbody>${
+    rows.map(i=>{ const po=SINV.pos[i.po_id]||{}, j=poJob(i.job_id), cur=po.currency||'GBP', pdf=SINV.pdf[i.id];
+      return `<tr${i.status==='void'?' style="opacity:.55"':''}><td><b>${esc(i.invoice_no)}</b>${i.note?`<div class="muted" style="font-size:11.5px">${esc(i.note)}</div>`:''}</td>
+        <td>${esc(poSupplier(i.supplier_id).name||'—')}</td><td style="white-space:nowrap"><a href="#" onclick="event.preventDefault();openPO('${i.po_id}')">${esc(po.po_ref||'')}</a></td>
+        <td>${esc(j.job_ref||'')}<div class="muted" style="font-size:11.5px">${esc(j.title||'')}</div></td>
+        <td style="white-space:nowrap">${jobDate(i.invoice_date)}</td><td style="text-align:right;white-space:nowrap">${jobMoney(i.net_amount,cur)}</td><td style="text-align:right;white-space:nowrap">${i.vat_amount!=null?jobMoney(i.vat_amount,cur):'—'}</td>
+        <td>${i.status==='void'?`<span class="chip grey">Void</span><div class="muted" style="font-size:11px">${esc(i.void_reason||'')}</div>`:'<span class="chip green">Entered</span>'}${i.xero_bill_id?'<div class="muted" style="font-size:11px">In Xero</div>':''}</td>
+        <td style="white-space:nowrap;text-align:right">${pdf?`<button class="btn-ghost" style="padding:4px 9px" onclick="siOpenPdf('${i.id}')">PDF</button> `:''}<button class="btn-ghost" style="padding:4px 9px" onclick="openPO('${i.po_id}')">Open PO</button></td></tr>`; }).join('')}
+    ${Object.keys(tot).sort().map(c=>`<tr><td colspan="5"><b>Total ${esc(c)} (entered)</b></td><td style="text-align:right"><b>${jobMoney(tot[c].net,c)}</b></td><td style="text-align:right"><b>${jobMoney(tot[c].vat,c)}</b></td><td colspan="2"></td></tr>`).join('')}</tbody></table></div>`;
+}
+async function siOpenPdf(id){
+  const a=SINV.pdf[id]; if(!a) return;
+  if(a.file_url){ window.open(a.file_url,'_blank'); return; }
+  const w=window.open('about:blank','_blank');
+  const r=await sb.storage.from('commercial').createSignedUrl(a.storage_path,120);
+  if(r.error||!r.data){ if(w) w.close(); alert('Could not open: '+(r.error?r.error.message:'')); return; }
+  if(w) w.location.href=r.data.signedUrl; else window.open(r.data.signedUrl,'_blank');
+}
+function pageSupplierInvoices(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','');
+  if(MYPERMS!==null && !jobCan('po.view')) return emptyState('🔒','No access','Your staff role does not include purchasing.');
+  if(SINV===null){ if(SINV_ERR) return emptyState('⚠','Could not load', esc(SINV_ERR)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="SINV_ERR=null;siReload()">Try again</button></div>`); loadSupplierInvoices(); return emptyState('⏳','Loading supplier invoices…','One moment.'); }
+  const opt=(v,l,cur)=>`<option value="${esc(v)}" ${v===cur?'selected':''}>${esc(l)}</option>`;
+  const supIds=[...new Set((SINV.inv||[]).map(i=>i.supplier_id))];
+  const live=(SINV.inv||[]).filter(i=>i.status==='entered');
+  const mStart=ymd(new Date(new Date().getFullYear(),new Date().getMonth(),1));
+  const month=live.filter(i=>String(i.invoice_date)>=mStart);
+  const noPdf=live.filter(i=>!SINV.pdf[i.id]);
+  const sumBy=list=>{ const by={}; list.forEach(i=>{ const c=(SINV.pos[i.po_id]||{}).currency||'GBP'; by[c]=(by[c]||0)+Number(i.net_amount||0); }); return Object.keys(by).sort().map(c=>jobMoney(by[c],c).replace(/\.00$/,'')).join(' · ')||'—'; };
+  return `<div class="sechead"><h3>🧾 Supplier Invoices</h3><span class="sub">Every invoice entered against a PO. Enter new ones from the PO with <b>Invoice now</b>.</span><span class="line"></span><button class="btn-ghost" onclick="siReload()">Refresh</button></div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${kpi('','🧾','Entered this month',month.length,'')}
+      <div class="card kpi"><div class="spark">💷</div><div class="lbl">Net this month</div><div class="val" style="font-size:19px">${sumBy(month)}</div></div>
+      ${kpi(noPdf.length?'a':'g','📎','Without a PDF',noPdf.length,'')}
+      ${kpi('','📚','All entered',live.length,'')}</div>
+    <div class="card fld" style="padding:12px 14px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+      <input placeholder="Search invoice no., PO, supplier, job, client…" value="${esc(SINV_F.q)}" oninput="siSet('q',this.value)" style="flex:1;min-width:200px;width:auto">
+      <select style="width:auto" onchange="siSet('status',this.value)">${opt('entered','Entered',SINV_F.status)}${opt('void','Void',SINV_F.status)}${opt('all','All',SINV_F.status)}</select>
+      <select style="width:auto" onchange="siSet('supplier',this.value)">${opt('all','All suppliers',SINV_F.supplier)}${supIds.map(id=>opt(id,poSupplier(id).name||'—',SINV_F.supplier)).join('')}</select>
+      <label style="font-size:12.5px">From <input type="date" style="width:auto" value="${esc(SINV_F.from)}" onchange="siSet('from',this.value)"></label>
+      <label style="font-size:12.5px">To <input type="date" style="width:auto" value="${esc(SINV_F.to)}" onchange="siSet('to',this.value)"></label></div>
+    <div class="card" id="siTable">${siTableHtml()}</div>`;
 }
 </script>
 </body>
