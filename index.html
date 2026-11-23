@@ -763,7 +763,6 @@ function renderShell(){
       </div>
       ${CLIENT?`${nl('🏢 '+esc(CLIENT.name))}
       ${nb('sites','▦','Progress')}
-      ${nb('schedule','▤','Schedule')}
       ${nb('rota','📆','Shift Rota')}
       ${nb('teams','👥','Site Team Profiles')}
       ${nb('callouts','🔧','Call-Out Reports')}
@@ -786,7 +785,6 @@ function renderShell(){
       ${nl('Programme')}
       <button class="nav-btn active" data-page="overview"><span class="ic">◫</span> Overview</button>
       ${nb('sites','▦','Progress')}
-      ${nb('schedule','▤','Schedule')}
       ${nb('teams','👥','Site Team Profiles')}
       ${nb('rota','📆','Shift Rota')}
       ${nl('Reports')}
@@ -1791,7 +1789,8 @@ function installDraftsCard(){
 }
 function pageInstalls(){
   const editor=isEditor(); const submit=canSubmit();
-  const list=(DATA.progress||[]).slice().sort((a,b)=>new Date(b.report_date||b.submitted_at)-new Date(a.report_date||a.submitted_at));
+  const all=(DATA.progress||[]).slice().sort((a,b)=>new Date(b.report_date||b.submitted_at)-new Date(a.report_date||a.submitted_at));
+  const list=rptFiltered('install', all);
   const mech=list.filter(r=>r.discipline==='Mechanical'||r.discipline==='Both');
   const elec=list.filter(r=>r.discipline==='Electrical'||r.discipline==='Both');
   const avg=arr=>arr.length?Math.round(arr.reduce((a,r)=>a+(Number(r.progress_pct)||0),0)/arr.length):0;
@@ -1801,13 +1800,15 @@ function pageInstalls(){
     ${kpi('a','⚡','Electrical — latest avg', (elec.length?avg(elec.slice(0,6)):0),'%')}
     ${kpi('g','🔩','Reports filed', list.length,'')}</div>`;
   const drafts = installDraftsCard();
-  if(!list.length) return header+cards+drafts+emptyState('🔩','No install reports yet',editor?'Tap “New install report” to log today’s mechanical or electrical progress.':'Daily mechanical and electrical install updates will appear here.');
+  const bar=all.length?rptFilterBar('install', all):'';
+  if(!list.length) return header+cards+drafts+bar+emptyState('🔩',all.length?'No install reports match':'No install reports yet',editor?'Tap “New install report” to log today’s mechanical or electrical progress.':'Daily mechanical and electrical install updates will appear here.');
   const rows=list.map(r=>{
     const s=(DATA.sites||[]).find(x=>x.id===r.site_id)||{};
     const actions=`<td style="text-align:right;white-space:nowrap">${pdfCell('install',r)}${editor?` <button class="edit-btn" onclick="openInstallForm('${r.id}')">Edit</button> <button class="edit-btn" onclick="openMoveReport('install','${r.id}')" title="Move to the correct client">↪ Move</button>`:''}</td>`;
     return `<tr>
       <td class="muted" style="white-space:nowrap">${esc(String(r.report_date||r.submitted_at||'').slice(0,10))}</td>
-      <td><span class="site-code">${esc(s.code||'—')}</span><div class="muted" style="font-size:11px">${esc(s.city||'')}</div></td>
+      <td><span class="site-code">${esc(s.name||s.code||'—')}</span><div class="muted" style="font-size:11px">${esc(s.city||'')}</div></td>
+      <td>${rptJobCell('install',r)}</td>
       <td>${discChip(r.discipline)}</td>
       <td>${esc(r.engineer||'—')}</td>
       <td><div class="pcell"><div class="pbar ${Number(r.progress_pct)>=100?'green':'cyan'}"><i style="width:${Number(r.progress_pct)||0}%"></i></div><b>${Math.round(r.progress_pct||0)}%</b></div></td>
@@ -1815,7 +1816,7 @@ function pageInstalls(){
       <td>${esc(String(r.work_completed||'').slice(0,80))}${String(r.work_completed||'').length>80?'…':''}${(r.loto_permit||r.handback_signed)?`<div style="margin-top:4px">${r.loto_permit?'<span class="chip green" style="font-size:10px">LOTO/Permit ✓</span> ':''}${r.handback_signed?'<span class="chip green" style="font-size:10px">RME hand-back ✓</span>':''}</div>`:''}</td>
       ${actions}</tr>`;
   }).join('');
-  return header+cards+drafts+`<div class="card"><table><thead><tr><th>Date</th><th>Site</th><th>Discipline</th><th>Engineer</th><th>Progress</th><th>Plan</th><th>Work completed</th><th>Report</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return header+cards+drafts+bar+`<div class="card"><table><thead><tr><th>Date</th><th>Site</th><th>Job</th><th>Discipline</th><th>Engineer</th><th>Progress</th><th>Plan</th><th>Work completed</th><th>Report</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 function openInstallForm(reportId, fromPick, draft){
   if(!CLIENT){ alert('Pick a client first.'); return; }
@@ -1830,6 +1831,7 @@ function openInstallForm(reportId, fromPick, draft){
     <div class="modal-b">
       ${engineerDatalist()}
       ${clientPickField('install', !!reportId || fromPick)}
+      ${rptBlockHtml()}
       <div class="box see" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:11px 13px;font-size:12.5px;color:var(--muted);margin-bottom:14px">Logs today’s mechanical or electrical install progress. This is shown to the client in their portal.</div>
       <div class="frow">
         <div class="fld"><label>Site <span class="req">*</span></label><select id="ir_site">${siteOpts}</select></div>
@@ -1872,6 +1874,7 @@ function openInstallForm(reportId, fromPick, draft){
     <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div>
   </div>`;
   document.body.appendChild(wrap); setupPhoto();
+  rptInit('install', reportId?r:null);
   if(reportId&&Array.isArray(r.media_links)){ CAPTURE.existing=r.media_links.slice(); }
   // draft resume: prefill from a saved draft
   if(draft){ CAPTURE.draftId=draft.id; if(Array.isArray(draft.media)){ CAPTURE.existing=draft.media.slice(); renderThumbs(); } prefillInstallFromPayload(draft.payload||{}); }
@@ -1919,6 +1922,7 @@ async function discardDraft(id){ if(!confirm('Discard this draft report? This ca
 function resumeInstallDraft(id){ const d=(DATA.drafts||[]).find(x=>x.id===id); if(!d) return; openInstallForm(null,false,d); }
 async function submitInstall(reportId){
   if(!val('f_client')){ msg('Please choose the client this report is for.','err'); const c=el('f_client'); if(c)c.focus(); return; }
+  { const e=rptBeforeSubmit('install', reportId); if(e){ msg(e,'err'); return; } }
   const sid=val('ir_site'); if(!sid){ msg('Please choose a site.','err'); return; }
   if(!val('ir_done')){ msg('Please note what was completed today.','err'); return; }
   const btn=el('irSave'); btn.disabled=true; btn.textContent='Saving…'; msg('','');
@@ -1928,7 +1932,7 @@ async function submitInstall(reportId){
     plan_flag:val('ir_flag')||null, planned_days:num('ir_pd'), actual_days:num('ir_ad'),
     hours_worked:num('ir_hours'), headcount:num('ir_head'),
     work_completed:val('ir_done'), materials:val('ir_mat')||null, issues:issues||null,
-    delay_reason:issues||null, next_steps:val('ir_next')||null };
+    delay_reason:issues||null, next_steps:val('ir_next')||null, ...rptFields() };
   // Pipp-only confirmations (harmless for others; only added when present on the form)
   if(isPipp()){ row.loto_permit = el('ir_loto')?el('ir_loto').checked:null; row.loto_ref=val('ir_lotoref')||null; row.handback_signed = el('ir_handback')?el('ir_handback').checked:null; row.rme_signoff=val('ir_rme')||null; }
   const stripPipp=(o)=>{ const c=Object.assign({},o); delete c.loto_permit; delete c.loto_ref; delete c.handback_signed; delete c.rme_signoff; return c; };
@@ -1941,7 +1945,8 @@ async function submitInstall(reportId){
     let {data:ins,error}=await sb.from('progress_reports').insert(row).select().maybeSingle();
     if(schemaErr(error)){ const r2=await sb.from('progress_reports').insert(stripPipp(row)).select().maybeSingle(); ins=r2.data; error=r2.error; }
     if(error){ btn.disabled=false; btn.textContent='Post report'; msg('Could not save: '+error.message,'err'); return; }
-    savedId=ins?ins.id:null; }
+    savedId=ins?ins.id:null;
+    try{ await rptAfterInsert('install', savedId); }catch(e){ console.warn('hours',e); } }
   // photos & videos -> storage + media + link (best-effort, never blocks the save)
   if(CAPTURE.photos.length || (CAPTURE.videos||[]).length){ btn.textContent='Uploading media…'; const ref='INSTALL-'+(savedId||Date.now());
     const urls=await uploadCapture('install', savedId, `${CLIENT.slug}/install/${ref}`);
@@ -2024,7 +2029,7 @@ const FORMS = {
       </div>
       <div class="frow">
         <div class="fld"><label>Priority</label><select id="f_priority"><option>Priority 1</option><option selected>Priority 2</option><option>Priority 3</option><option>Priority 4</option></select></div>
-        <div class="fld"><label>Status</label><select id="f_status"><option>Logged</option><option>On Site</option><option selected>In Progress</option><option>Temporary Repair Completed</option><option>Completed</option></select></div>
+        <div class="fld"><label>Status</label><select id="f_status"><option>Logged</option><option>Attending</option><option selected>On site</option><option>Completed</option><option>Follow-up needed</option></select></div>
       </div>
       <div class="frow">
         <div class="fld"><label>Asset reference</label><input id="f_asset" placeholder="e.g. Conveyor 3 / Rack A12"></div>
@@ -2113,6 +2118,7 @@ function openForm(type, fromPick, rec){
     <div class="modal-b">
       ${clientPickField(type, editing||fromPick)}
       ${engineerDatalist()}
+      ${rptBlockHtml()}
       ${f.fields}
       <div class="fld"><label>Photos</label><div class="photos" id="photoWrap">
         <label class="photo-add">＋<input type="file" accept="image/*,video/*" multiple style="display:none" id="photoInput"></label>
@@ -2129,6 +2135,8 @@ function openForm(type, fromPick, rec){
   </div>`;
   document.body.appendChild(wrap);
   setupPhoto(); setupSig(); if(!editing) captureGps();
+  if(editing && type==='callout' && rec.status && el('f_status') && ![...el('f_status').options].some(o=>o.value===rec.status)){ const o=document.createElement('option'); o.textContent=rec.status; el('f_status').insertBefore(o, el('f_status').firstChild); }
+  rptInit(type, editing?rec:null);
   if(editing){
     prefillForm(type, rec);
     if(Array.isArray(rec.media_links)) CAPTURE.existing=rec.media_links.slice();
@@ -2319,11 +2327,12 @@ async function uploadCapture(reportType, reportId, pathBase){
 async function submitForm(type, editId){
   const f=FORMS[type];
   if(!val('f_client')){ msg('Please choose the client this report is for.','err'); const c=el('f_client'); if(c)c.focus(); return; }
+  { const e=rptBeforeSubmit(type, editId); if(e){ msg(e,'err'); return; } }
   for(const id of f.required){ if(!val(id)){ msg('Please fill in the required fields.','err'); el(id).focus(); return; } }
   const btn=el('saveBtn'); btn.disabled=true; btn.textContent='Saving…'; msg('','');
   // ---- EDIT MODE (admins): update the existing report in place ----
   if(editId){
-    const erow=f.collect();
+    const erow=Object.assign(f.collect(), rptFields());
     if(type==='callout'){ erow.customer_sign_name=val('f_signname')||null; }
     const {error}=await sb.from(f.table).update(erow).eq('id',editId);
     if(error){ btn.disabled=false; btn.textContent='Save changes'; msg('Could not save: '+error.message,'err'); return; }
@@ -2356,7 +2365,7 @@ async function submitForm(type, editId){
     setTimeout(()=>{ closeForm(); go(type==='callout'?'callouts':'shifts'); }, 700); return;
   }
   const ref=f.prefix+'-'+Date.now();
-  const row=Object.assign(f.collect(), {
+  const row=Object.assign(f.collect(), rptFields(), {
     client_id: CLIENT.id,
     submitted_at: new Date().toISOString(),
     latitude: CAPTURE.gps?CAPTURE.gps.lat:null,
@@ -2374,6 +2383,7 @@ async function submitForm(type, editId){
   }
   if(error){ btn.disabled=false; btn.textContent='Submit report'; msg('Could not save: '+error.message,'err'); return; }
   const id=ins?ins.id:null;
+  try{ await rptAfterInsert(type, id); }catch(e){ console.warn('hours',e); }
   // 2) Best-effort: upload photos & videos + signature, generate PDF
   btn.textContent='Uploading media…';
   const photoUrls=await uploadCapture(type, id, `${CLIENT.slug}/${ref}`);
@@ -2807,28 +2817,30 @@ async function submitMoveReport(table,id){
   }catch(e){ btn.disabled=false; btn.textContent='↪ Move report'; msg('Could not move: '+(e.message||e),'err'); }
 }
 function pageCallouts(){
-  const rows=DATA.callouts||[];
-  if(!rows.length) return capHeader('Call-Out Reports','none yet','callout','New Call-Out')+emptyState('🔧','No call-outs yet','Tap “New Call-Out” to log one from site — with photos, signature and location.');
-  return capHeader('Call-Out Reports',`${rows.length} on record`,'callout','New Call-Out')+
-    `<div class="card"><table><thead><tr><th>Reference</th><th>Site</th><th>Date</th><th>Engineer</th><th>Priority</th><th>Status</th><th>Fault</th><th>Signed</th><th>Report</th></tr></thead><tbody>${rows.map(r=>`
-      <tr><td><span class="site-code">${esc(r.job_number||'—')}</span></td>
+  const all=DATA.callouts||[], rows=rptFiltered('callout', all);
+  if(!all.length) return capHeader('Call-Out Reports','none yet','callout','New Call-Out')+emptyState('🔧','No call-outs yet','Tap “New Call-Out” to log one from site — with photos, signature and location.');
+  return capHeader('Call-Out Reports',`${all.length} on record`,'callout','New Call-Out')+rptFilterBar('callout', all)+
+    `<div class="card"><table><thead><tr><th>Reference</th><th>Job</th><th>Site</th><th>Date</th><th>Engineer</th><th>Priority</th><th>Status</th><th>Fault</th><th>Signed</th><th>Report</th></tr></thead><tbody>${rows.map(r=>`
+      <tr><td><span class="site-code">${esc(r.job_number||'—')}</span>${r.chargeable===false?'<div class="muted" style="font-size:11px">Not chargeable</div>':''}</td>
+      <td>${rptJobCell('callout',r)}</td>
       <td>${siteLabel(r)}${r.site_address?`<div class="muted" style="font-size:11px">${esc(r.site_address)}</div>`:''}</td>
       <td class="muted">${esc(String(r.call_date||r.submitted_at||'').slice(0,10))}</td>
       <td>${esc(r.engineer||'')}</td>
       <td>${priChip(r.priority)}</td>
-      <td><span class="chip grey" style="background:var(--panel2)">${esc(r.status||'')}</span></td>
+      <td>${coStatusCell(r)}</td>
       <td>${esc(String(r.fault_description||'').slice(0,80))}</td>
       <td>${sigCell('callout',r)}</td>
-      <td style="white-space:nowrap">${pdfCell('callout',r)}${isEditor()?` <button class="edit-btn" onclick="editReport('callout','${r.id}')">Edit</button> <button class="edit-btn" onclick="openMoveReport('callout','${r.id}')" title="Move to the correct client">↪ Move</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;
+      <td style="white-space:nowrap">${pdfCell('callout',r)}${isEditor()?` <button class="edit-btn" onclick="editReport('callout','${r.id}')">Edit</button> <button class="edit-btn" onclick="openMoveReport('callout','${r.id}')" title="Move to the correct client">↪ Move</button>`:''}</td></tr>`).join('')||'<tr><td colspan="10" class="muted" style="padding:12px">No call-outs match.</td></tr>'}</tbody></table></div>`;
 }
 
 /* ============ SHIFT REPORTS ============ */
 function pageShifts(){
-  const rows=DATA.shifts||[];
-  if(!rows.length) return capHeader('Shift Reports','none yet','shift','New Shift Report')+emptyState('🗓','No shift reports yet','Tap “New Shift Report” to file one at the end of a shift.');
-  return capHeader('Shift Reports',`${rows.length} on record`,'shift','New Shift Report')+
-    `<div class="card"><table><thead><tr><th>Date</th><th>Site</th><th>Shift</th><th>Engineer</th><th>Status</th><th>Hours</th><th>Work / Issues</th><th>Signed</th><th>Report</th></tr></thead><tbody>${rows.map(r=>`
+  const all=DATA.shifts||[], rows=rptFiltered('shift', all);
+  if(!all.length) return capHeader('Shift Reports','none yet','shift','New Shift Report')+emptyState('🗓','No shift reports yet','Tap “New Shift Report” to file one at the end of a shift.');
+  return capHeader('Shift Reports',`${all.length} on record`,'shift','New Shift Report')+rptFilterBar('shift', all)+
+    `<div class="card"><table><thead><tr><th>Date</th><th>Job</th><th>Site</th><th>Shift</th><th>Engineer</th><th>Status</th><th>Hours</th><th>Work / Issues</th><th>Signed</th><th>Report</th></tr></thead><tbody>${rows.map(r=>`
       <tr><td class="muted">${esc(String(r.shift_date||r.submitted_at||'').slice(0,10))}</td>
+      <td>${rptJobCell('shift',r)}</td>
       <td>${siteLabel(r)}</td>
       <td>${esc(r.shift||'—')}</td>
       <td>${esc(r.engineer||'')}</td>
@@ -2836,7 +2848,7 @@ function pageShifts(){
       <td>${r.hours_worked!=null?esc(r.hours_worked):''}</td>
       <td>${esc(String(r.work_completed||r.issues||'').slice(0,80))}</td>
       <td>${sigCell('shift',r)}</td>
-      <td style="white-space:nowrap">${pdfCell('shift',r)}${isEditor()?` <button class="edit-btn" onclick="editReport('shift','${r.id}')">Edit</button> <button class="edit-btn" onclick="openMoveReport('shift','${r.id}')" title="Move to the correct client">↪ Move</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;
+      <td style="white-space:nowrap">${pdfCell('shift',r)}${isEditor()?` <button class="edit-btn" onclick="editReport('shift','${r.id}')">Edit</button> <button class="edit-btn" onclick="openMoveReport('shift','${r.id}')" title="Move to the correct client">↪ Move</button>`:''}</td></tr>`).join('')||'<tr><td colspan="10" class="muted" style="padding:12px">No shift reports match.</td></tr>'}</tbody></table></div>`;
 }
 
 /* ===================================================================
@@ -5005,15 +5017,15 @@ function go(page){
     else if(page==='command')html=pageCommand();
     else if(page==='checkins')html=pageCheckins();
     else if(page==='overview')html=pageOverview();
-    else if(page==='sites')html=pageSites();
-    else if(page==='schedule')html=pageSchedule();
-    else if(page==='rota')html=pageRota();
+    else if(page==='sites')html=(PROFILE.role==='engineer'?pageSites():pageProgress());
+    else if(page==='schedule')html=(PROFILE.role==='engineer'?pageSchedule():(PROG.mode='timeline',pageProgress()));
+    else if(page==='rota')html=(PROFILE.role==='engineer'?pageRota():pageRotaTeam());
     else if(page==='teams')html=(PROFILE.role==='engineer'?pageTeams():pageTeamProfiles());
     else if(page==='installs')html=pageInstalls();
     else if(page==='risks')html=pageRisks();
     else if(page==='callouts')html=pageCallouts();
     else if(page==='shifts')html=pageShifts();
-    else if(page==='reports')html=pageReports();
+    else if(page==='reports')html=(PROFILE.role==='engineer'?pageReports():pageActivity());
     else if(page==='gallery')html=pageGallery();
     else if(page==='requests')html=pageRequests();
     else if(page==='quotes')html=pageQuotes();
@@ -9047,6 +9059,331 @@ async function stpPack(wid){
     doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(150,160,175); doc.text('Mercury Automated Solutions · profile generated '+new Date().toLocaleDateString('en-GB'),L,H-26);
   }
   doc.save(`Team-profiles-${String(CLIENT.name).replace(/[^a-z0-9]+/gi,'_')}${wid?'-'+String(people[0].name).replace(/[^a-z0-9]+/gi,'_'):''}.pdf`);
+}
+/* ===================================================================
+   REPORTS  —  release 15 (build release 7).
+   Job picker, hours per person and Chargeable on call-out, shift and
+   install reports; filters and "Needs a job" on the report lists;
+   call-out statuses; the Activity Feed; Progress (with the schedule as a
+   timeline); the Shift Rota built from the job Team tabs.
+   =================================================================== */
+
+const CO_STATUSES=['Logged','Attending','On site','Completed','Follow-up needed'];
+let RPT={client:null, jobs:null, people:null, type:null, edit:null};
+let CJOBS={client:null, list:null, loading:false};
+
+/* ---------- a client's jobs (no money), for lists, Progress and the rota ---------- */
+function cjobs(){
+  if(!CLIENT) return [];
+  if(CJOBS.client===CLIENT.id && CJOBS.list) return CJOBS.list;
+  if(!CJOBS.loading || CJOBS.client!==CLIENT.id){
+    CJOBS={client:CLIENT.id, list:null, loading:true};
+    const cid=CLIENT.id, page=CURRENT;
+    sb.rpc('client_jobs',{p_client:cid}).then(r=>{ if(CJOBS.client!==cid) return; CJOBS.list=r.error?[]:(r.data||[]); CJOBS.loading=false; if(CURRENT===page) go(page); });
+  }
+  return [];
+}
+function cjobRef(id){ const j=(CJOBS.list||[]).find(x=>x.id===id); return j?j.job_ref:''; }
+function cjobsReload(){ CJOBS={client:null, list:null, loading:false}; }
+
+/* ---------- report forms: job, Chargeable, hours per person ---------- */
+function rptEls(type){ return type==='install'?{eng:'ir_eng', site:'ir_site', name:null}:{eng:'f_engineer', site:'f_site', name:'f_sitename'}; }
+function rptBlockHtml(){ return `<div id="rptBox" class="card" style="padding:10px 12px;margin-bottom:12px;border-style:dashed"><div class="muted" style="font-size:12.5px">Loading this client’s jobs…</div></div>`; }
+async function rptInit(type, rec){
+  RPT.type=type; RPT.edit=rec&&rec.id?rec:null;
+  const box=el('rptBox'); if(!box||!CLIENT) return;
+  try{
+    if(RPT.client!==CLIENT.id || !RPT.jobs){ const r=await sb.rpc('report_jobs',{p_client:CLIENT.id}); RPT.jobs=r.error?[]:(r.data||[]); RPT.client=CLIENT.id; }
+    if(!RPT.people){ const p=await sb.rpc('report_people'); RPT.people=p.error?[]:(p.data||[]); }
+  }catch(e){ RPT.jobs=RPT.jobs||[]; RPT.people=RPT.people||[]; }
+  const cur=rec&&rec.job_id, none=rec&&rec.needs_job;
+  const jobs=RPT.jobs.slice(); if(cur && !jobs.some(j=>j.id===cur)) jobs.unshift({id:cur, job_ref:cjobRef(cur)||'Linked job', title:''});
+  let hoursHtml='';
+  if(RPT.edit){
+    const h=await sb.from('report_hours').select('worker_id,hours,ot_hours').eq('report_type',type).eq('report_id',rec.id);
+    hoursHtml=(h.data||[]).length?`<div class="muted" style="font-size:12.5px;margin-top:8px">Hours on this report: ${(h.data||[]).map(x=>esc(rptPerson(x.worker_id))+' '+Number(x.hours)+'h').join(', ')}</div>`:'';
+  } else {
+    hoursHtml=`<div style="font-weight:700;margin:10px 0 4px;font-size:13px">Hours per person</div><div id="rptHours"></div>
+      <button type="button" class="btn-ghost" style="padding:5px 10px" onclick="rptAddRow()">＋ Add person</button>
+      <div class="muted" style="font-size:11.5px;margin-top:4px">These go onto the job’s labour for the office to confirm.</div>`;
+  }
+  box.innerHTML=`<div class="frow"><div class="fld" style="flex:2"><label>Job <span class="req">*</span></label><select id="f_job" onchange="rptJobPicked()">
+      <option value="">— choose the job —</option>${jobs.map(j=>`<option value="${j.id}" ${j.id===cur?'selected':''}>${esc(j.job_ref)}${j.title?' · '+esc(j.title):''}${j.site_name?' — '+esc(j.site_name):''}</option>`).join('')}
+      <option value="__none" ${none&&!cur?'selected':''}>No job set up yet for this site</option></select></div>
+    <div class="fld" style="flex:1"><label>&nbsp;</label><label style="display:flex;gap:7px;align-items:center;font-size:13px"><input type="checkbox" id="f_charge" style="width:auto" ${!rec||rec.chargeable!==false?'checked':''}> Chargeable</label></div></div>
+    <div id="rptNone" class="note" style="display:${none&&!cur?'':'none'};font-size:12px">The report will be flagged <b>Needs a job</b> until the office links it.</div>
+    ${hoursHtml}`;
+  if(!RPT.edit) rptAddRow();
+}
+function rptPerson(id){ const p=(RPT.people||[]).find(x=>x.id===id); return p?p.name:'—'; }
+function rptAddRow(wid, hrs){
+  const w=el('rptHours'); if(!w) return;
+  const d=document.createElement('div'); d.className='rh-row'; d.style.cssText='display:flex;gap:6px;margin-bottom:5px';
+  d.innerHTML=`<select class="rh_w" style="flex:2"><option value="">— person —</option>${(RPT.people||[]).map(p=>`<option value="${p.id}" ${p.id===wid?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
+    <input class="rh_h" type="number" min="0" max="24" step="0.25" placeholder="Hours" style="flex:1" value="${hrs!=null?hrs:''}"><button type="button" class="crew-rm" title="Remove" onclick="this.closest('.rh-row').remove()">✕</button>`;
+  w.appendChild(d);
+}
+function rptJobPicked(){
+  const v=val('f_job'), j=(RPT.jobs||[]).find(x=>x.id===v), E=rptEls(RPT.type);
+  el('rptNone').style.display=v==='__none'?'':'none';
+  if(!j) return;
+  const s=el(E.site); if(s && j.site_id && [...s.options].some(o=>o.value===j.site_id)) s.value=j.site_id;
+  if(E.name && el(E.name) && !val(E.name)) el(E.name).value=j.site_name||'';
+  if(el('f_siteaddr') && !val('f_siteaddr') && j.site_address) el('f_siteaddr').value=j.site_address;
+  // fill people from the job's team today, if nobody has been entered yet
+  const rows=[...document.querySelectorAll('#rptHours .rh-row')];
+  if(rows.every(r=>!r.querySelector('.rh_w').value) && (j.team||[]).length){
+    rows.forEach(r=>r.remove()); j.team.forEach(w=>rptAddRow(w,''));
+    if(!engMultiCollect(E.eng)) engMultiSet(E.eng, j.team.map(rptPerson).filter(n=>n!=='—').join(', '));
+  }
+}
+/* returns an error message, or null; fills the engineer names from the hours if empty */
+function rptBeforeSubmit(type, editId){
+  if(!el('f_job')) return null;
+  if(!editId && !val('f_job')) return 'Choose the job, or “No job set up yet”.';
+  const hrs=rptHoursRows();
+  if(hrs.bad) return 'Each person needs their hours (or remove the row).';
+  const E=rptEls(type);
+  if(!engMultiCollect(E.eng) && hrs.list.length) engMultiSet(E.eng, hrs.list.map(h=>rptPerson(h.worker_id)).join(', '));
+  return null;
+}
+function rptHoursRows(){
+  const list=[]; let bad=false;
+  document.querySelectorAll('#rptHours .rh-row').forEach(r=>{ const w=r.querySelector('.rh_w').value, h=Number(r.querySelector('.rh_h').value);
+    if(!w) return; if(!(h>0)){ bad=true; return; } if(!list.some(x=>x.worker_id===w)) list.push({worker_id:w, hours:h}); });
+  return {list, bad};
+}
+function rptFields(){
+  if(!el('f_job')) return {};
+  const v=val('f_job');
+  const o={chargeable:el('f_charge').checked};
+  if(v==='__none'){ o.job_id=null; o.needs_job=true; }
+  else if(v){ o.job_id=v; o.needs_job=false; }
+  return o;
+}
+async function rptAfterInsert(type, id){
+  if(!id) return;
+  const hrs=rptHoursRows().list; if(!hrs.length) return;
+  const r=await sb.from('report_hours').insert(hrs.map(h=>({report_type:type, report_id:id, worker_id:h.worker_id, hours:h.hours, client_id:CLIENT.id})));
+  if(r.error) console.warn('report hours',r.error);
+}
+
+/* ---------- report lists: filters, job column, Needs a job, call-out status ---------- */
+let RF={callout:{}, shift:{}, install:{}};
+function rptFiltered(type, rows){
+  const f=RF[type]||{};
+  return rows.filter(r=>{
+    const d=String(type==='callout'?(r.call_date||r.submitted_at):type==='shift'?(r.shift_date||r.submitted_at):(r.report_date||r.submitted_at)||'').slice(0,10);
+    if(f.job==='none' && !r.needs_job) return false;
+    if(f.job && !['all','none'].includes(f.job) && r.job_id!==f.job) return false;
+    if(f.site && r.site_id!==f.site) return false;
+    if(f.eng && !String(r.engineer||'').toLowerCase().includes(f.eng.toLowerCase())) return false;
+    if(f.from && d<f.from) return false;
+    if(f.to && d>f.to) return false;
+    if(f.status && String(r.status||'')!==f.status) return false;
+    if(f.disc && r.discipline!==f.disc) return false;
+    return true;
+  });
+}
+function rptSet(type,k,v){ RF[type][k]=v; go(CURRENT); setTimeout(()=>{ const e=el('rf_'+k); if(e && k==='eng'){ e.focus(); e.setSelectionRange(e.value.length,e.value.length); } },10); }
+function rptFilterBar(type, rows){
+  const f=RF[type], jobs=cjobs(), opt=(v,l,c)=>`<option value="${esc(v)}" ${v===c?'selected':''}>${esc(l)}</option>`;
+  const statuses=[...new Set(rows.map(r=>r.status).filter(Boolean))];
+  const needs=rows.filter(r=>r.needs_job).length;
+  return `<div class="card fld" style="padding:10px 12px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+    <select style="width:auto" onchange="rptSet('${type}','job',this.value)">${opt('all','All jobs',f.job||'all')}${opt('none',`Needs a job (${needs})`,f.job)}${jobs.map(j=>opt(j.id,j.job_ref+' · '+(j.title||''),f.job)).join('')}</select>
+    <select style="width:auto" onchange="rptSet('${type}','site',this.value)">${opt('','All sites',f.site||'')}${(DATA.sites||[]).map(s=>opt(s.id,s.name||s.code||s.city||'Site',f.site)).join('')}</select>
+    <input id="rf_eng" placeholder="Engineer" value="${esc(f.eng||'')}" oninput="rptSet('${type}','eng',this.value)" style="width:150px">
+    <label style="font-size:12.5px">From <input type="date" style="width:auto" value="${esc(f.from||'')}" onchange="rptSet('${type}','from',this.value)"></label>
+    <label style="font-size:12.5px">To <input type="date" style="width:auto" value="${esc(f.to||'')}" onchange="rptSet('${type}','to',this.value)"></label>
+    ${type==='install'?`<select style="width:auto" onchange="rptSet('install','disc',this.value)">${opt('','All disciplines',f.disc||'')}${DISCIPLINES.map(d=>opt(d,d,f.disc)).join('')}</select>`:
+      `<select style="width:auto" onchange="rptSet('${type}','status',this.value)">${opt('','All statuses',f.status||'')}${(type==='callout'?CO_STATUSES:[]).concat(statuses).filter((v,i,a)=>a.indexOf(v)===i).map(s=>opt(s,s,f.status)).join('')}</select>`}
+    ${Object.values(f).some(Boolean)?`<button class="btn-ghost" style="padding:5px 10px" onclick="RF['${type}']={};go(CURRENT)">Clear</button>`:''}</div>`;
+}
+function rptJobCell(type, r){
+  if(r.job_id) return `<span class="chip cyan" style="font-size:10.5px">${esc(cjobRef(r.job_id)||'Job')}</span>`;
+  if(r.needs_job) return `<span class="chip amber" style="font-size:10.5px">Needs a job</span>${VIEW!=='client'&&isEditor()?`<div><button class="edit-btn" style="margin-top:3px" onclick="rptLinkJob('${type}','${r.id}')">Link job</button></div>`:''}`;
+  return VIEW!=='client'&&isEditor()?`<button class="edit-btn" onclick="rptLinkJob('${type}','${r.id}')">Link job</button>`:'<span class="muted">—</span>';
+}
+const RPT_TABLE={callout:'callout_reports', shift:'shift_reports', install:'progress_reports'};
+function rptLinkJob(type, id){
+  const jobs=(CJOBS.list||[]).filter(j=>!['invoiced','closed'].includes(j.status));
+  billModal('rlModal','Link the report to a job',
+    `<div class="fld"><label>Job</label><select id="rl_job"><option value="">— choose —</option>${jobs.map(j=>`<option value="${j.id}">${esc(j.job_ref+' · '+(j.title||'')+(j.site_name?' — '+j.site_name:''))}</option>`).join('')}</select></div>
+     <div class="muted" style="font-size:12.5px">Any hours per person on the report go onto that job’s labour, ready to confirm.</div>`,
+    `<button class="btn-ghost" onclick="el('rlModal').remove()">Cancel</button><button class="btn" onclick="rptLinkSave('${type}','${id}')">Link</button>`);
+}
+async function rptLinkSave(type, id){
+  const j=val('rl_job'); if(!j) return billSay('rlModal','Choose the job.');
+  const r=await sb.from(RPT_TABLE[type]).update({job_id:j}).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length) return billSay('rlModal','Not linked: '+(r.error?r.error.message:'no permission'));
+  el('rlModal').remove(); await loadClientData(); go(CURRENT);
+}
+function coStatusCell(r){
+  if(VIEW==='client' || !isEditor()) return `<span class="chip ${coStatusCls(r.status)}">${esc(r.status||'')}</span>`;
+  const list=CO_STATUSES.includes(r.status)||!r.status?CO_STATUSES:[r.status].concat(CO_STATUSES);
+  return `<select style="width:auto;padding:4px 8px;font-size:12px" onchange="coSetStatus('${r.id}',this.value,this)">${list.map(s=>`<option ${s===r.status?'selected':''}>${esc(s)}</option>`).join('')}</select>`;
+}
+function coStatusCls(s){ return s==='Completed'?'green':s==='Follow-up needed'?'amber':s==='On site'?'cyan':s==='Attending'?'violet':'grey'; }
+async function coSetStatus(id, s, sel){
+  const r=await sb.from('callout_reports').update({status:s}).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length){ alert('Not saved: '+(r.error?r.error.message:'no permission')); await loadClientData(); go(CURRENT); return; }
+  const x=(DATA.callouts||[]).find(c=>c.id===id); if(x) Object.assign(x, r.data[0]);
+}
+
+/* ---------- Activity Feed ---------- */
+let AF={n:60, items:null, err:null, f:{client:'', job:'', type:'', eng:'', from:'', to:''}, key:''};
+function afKey(){ return JSON.stringify([AF.n, AF.f, VIEW, CLIENT&&CLIENT.id]); }
+async function afLoad(){
+  const k=afKey(); AF.key=k; AF.items=null; AF.err=null;
+  const f=AF.f, office=VIEW!=='client' && PROFILE.role==='admin';
+  const clientId=office?(f.client||null):(CLIENT&&CLIENT.id);
+  const q=(table, dateCol, sel)=>{ let x=sb.from(table).select(sel).order('submitted_at',{ascending:false}).limit(AF.n);
+    if(clientId) x=x.eq('client_id',clientId); if(f.job) x=x.eq('job_id',f.job);
+    if(f.from) x=x.gte('submitted_at',f.from); if(f.to) x=x.lte('submitted_at',f.to+'T23:59:59');
+    if(f.eng && table!=='daily_reports') x=x.ilike('engineer','%'+f.eng+'%'); return x; };
+  try{
+    const want=t=>!f.type||f.type===t;
+    const [co,sh,pr,dr]=await Promise.all([
+      want('callout')?q('callout_reports','call_date','id,client_id,job_id,site_id,site_name,engineer,call_date,priority,status,fault_description,work_carried_out,pdf_url,submitted_at,needs_job'):{data:[]},
+      want('shift')?q('shift_reports','shift_date','id,client_id,job_id,site_id,site_name,engineer,shift_date,shift,status,work_completed,hours_worked,pdf_url,media_links,submitted_at,needs_job'):{data:[]},
+      want('install')?q('progress_reports','report_date','id,client_id,job_id,site_id,engineer,report_date,discipline,progress_pct,plan_flag,work_completed,pdf_url,media_links,submitted_at,needs_job'):{data:[]},
+      want('daily')&&!f.job&&!f.eng?q('daily_reports','report_date','id,client_id,site_id,supervisor,report_date,status,work_completed,progress_pct,pdf_url,media_links,submitted_at'):{data:[]}]);
+    for(const r of [co,sh,pr,dr]) if(r.error) throw r.error;
+    const items=[
+      ...(co.data||[]).map(r=>({t:'callout', ic:'🔧', lab:'Call-out', r, who:r.engineer, txt:r.fault_description||r.work_carried_out, extra:[r.priority,r.status].filter(Boolean).join(' · ')})),
+      ...(sh.data||[]).map(r=>({t:'shift', ic:'🗓', lab:'Shift report', r, who:r.engineer, txt:r.work_completed, extra:[r.shift,r.hours_worked!=null?r.hours_worked+'h':''].filter(Boolean).join(' · ')})),
+      ...(pr.data||[]).map(r=>({t:'install', ic:'🔩', lab:'Install report', r, who:r.engineer, txt:r.work_completed, extra:[r.discipline,r.progress_pct!=null?Math.round(r.progress_pct)+'%':'',r.plan_flag].filter(Boolean).join(' · ')})),
+      ...(dr.data||[]).map(r=>({t:'daily', ic:'📈', lab:'Daily update', r, who:r.supervisor, txt:r.work_completed, extra:[r.status,r.progress_pct!=null?Math.round(r.progress_pct)+'%':''].filter(Boolean).join(' · ')}))]
+      .sort((a,b)=>String(b.r.submitted_at||'').localeCompare(String(a.r.submitted_at||'')));
+    if(AF.key!==k) return;
+    AF.items=items; AF.more=[co,sh,pr,dr].some(r=>(r.data||[]).length>=AF.n);
+    if(office){ try{ await clPerms(); if(jobCan('jobs.view')){ if(JOBREG===null) await loadJobRegister(); await afMissing(); } }catch(e){ console.warn(e); } }
+  }catch(e){ AF.err=e.message||String(e); AF.items=[]; }
+  if(CURRENT==='reports') go('reports');
+}
+async function afMissing(){
+  const today=ymd(new Date());
+  const live=(JOBREG||[]).filter(j=>j.status==='live' && !j.archived_at && (!AF.f.client||j.client_id===AF.f.client));
+  if(!live.length){ AF.missing=[]; return; }
+  const ids=live.map(j=>j.id);
+  const [a,b,c]=await Promise.all(['callout_reports','shift_reports','progress_reports'].map(t=>sb.from(t).select('job_id').in('job_id',ids).gte('submitted_at',today)));
+  const done=new Set([...(a.data||[]),...(b.data||[]),...(c.data||[])].map(x=>x.job_id));
+  AF.missing=live.filter(j=>!done.has(j.id));
+}
+function afSet(k,v){ AF.f[k]=v; AF.n=60; afLoad(); }
+function pageActivity(){
+  const office=VIEW!=='client' && PROFILE.role==='admin';
+  if(AF.items===null || AF.key!==afKey()){ if(AF.key!==afKey()) afLoad(); return emptyState('⏳','Loading the activity feed…','One moment.'); }
+  const f=AF.f, opt=(v,l,c)=>`<option value="${esc(v)}" ${v===c?'selected':''}>${esc(l)}</option>`;
+  const jobOpts=office?(JOBREG||[]).filter(j=>!f.client||j.client_id===f.client):cjobs();
+  const cname=id=>{ const c=(CLIENTS||[]).find(x=>x.id===id); return c?c.name:''; };
+  const site=r=>{ const s=(JOBREG_SITES||[]).find(x=>x.id===r.site_id)||(DATA.sites||[]).find(x=>x.id===r.site_id); return r.site_name||(s?(s.name||s.code||s.city):''); };
+  const jref=id=>{ const j=(JOBREG||[]).find(x=>x.id===id); return j?j.job_ref:cjobRef(id); };
+  const filters=`<div class="card fld" style="padding:10px 12px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+    ${office?`<select style="width:auto" onchange="AF.f.job='';afSet('client',this.value)">${opt('','All clients',f.client)}${activeClients().map(c=>opt(c.id,c.name,f.client)).join('')}</select>`:''}
+    <select style="width:auto" onchange="afSet('job',this.value)">${opt('','All jobs',f.job)}${jobOpts.map(j=>opt(j.id,j.job_ref+' · '+(j.title||''),f.job)).join('')}</select>
+    <select style="width:auto" onchange="afSet('type',this.value)">${opt('','All report types',f.type)}${opt('callout','Call-outs',f.type)}${opt('shift','Shift reports',f.type)}${opt('install','Install reports',f.type)}${opt('daily','Daily updates',f.type)}</select>
+    <input placeholder="Engineer" value="${esc(f.eng)}" onchange="afSet('eng',this.value)" style="width:150px">
+    <label style="font-size:12.5px">From <input type="date" style="width:auto" value="${esc(f.from)}" onchange="afSet('from',this.value)"></label>
+    <label style="font-size:12.5px">To <input type="date" style="width:auto" value="${esc(f.to)}" onchange="afSet('to',this.value)"></label></div>`;
+  const warn=office&&(AF.missing||[]).length?`<div class="card" style="margin-bottom:12px;border-left:3px solid var(--amber)"><b>⚠ No report today from ${AF.missing.length} live job${AF.missing.length===1?'':'s'}:</b> ${AF.missing.map(j=>`<span class="chip amber" style="margin:2px">${esc(j.job_ref)} · ${esc(cname(j.client_id))}</span>`).join('')}</div>`:'';
+  const items=AF.items||[];
+  const list=items.length?items.map(x=>{ const r=x.r;
+    const photos=(r.media_links||[]).filter(u=>u&&!isVideoUrl(u));
+    return `<div class="litem" style="align-items:flex-start"><div class="av">${x.ic}</div><div class="bd"><div class="t">${esc(x.lab)}${office?` · ${esc(cname(r.client_id))}`:''}${r.job_id?` · <span class="chip cyan" style="font-size:10px">${esc(jref(r.job_id))}</span>`:''}${r.needs_job?' <span class="chip amber" style="font-size:10px">Needs a job</span>':''}</div>
+      <div class="m">${esc([site(r), x.who, x.extra].filter(Boolean).join(' · '))}</div>
+      <div style="font-size:12.5px;margin-top:3px">${esc(String(x.txt||'').slice(0,220))}</div>
+      ${photos.length?reqPhotoStrip(photos.slice(0,4)):''}</div>
+      <div class="when" style="text-align:right">${esc(jobDate(String(r.submitted_at||'').slice(0,10)))}<div class="muted" style="font-size:11px">${esc(rel(r.submitted_at))}</div>
+        ${x.t!=='daily'?`<div style="margin-top:4px"><button class="edit-btn" onclick="afPdf('${x.t}','${r.id}','${r.client_id}')">PDF</button></div>`:(r.pdf_url?`<a class="pdf-link" href="${esc(r.pdf_url)}" target="_blank">PDF ↗</a>`:'')}</div></div>`; }).join('')
+    :'<div class="empty"><div class="big">🗒</div><b>No reports match</b></div>';
+  return `<div class="sechead"><h3>🗒 Activity Feed</h3><span class="sub">${office?'Every report across all clients':'Your latest reports and updates'}, newest first</span><span class="line"></span><button class="btn-ghost" onclick="AF.key='';go('reports')">Refresh</button></div>
+    ${filters}${warn}<div class="card"><div class="list">${list}</div>
+    ${AF.more?`<div style="text-align:center;padding:10px"><button class="btn-ghost" onclick="AF.n+=60;afLoad()">Load more</button></div>`:''}</div>`;
+}
+async function afPdf(t, id, clientId){
+  const r=(AF.items||[]).find(x=>x.r.id===id); if(!r) return;
+  if(r.r.pdf_url){ window.open(r.r.pdf_url,'_blank'); return; }
+  const table=RPT_TABLE[t]; const full=await sb.from(table).select('*').eq('id',id).single();
+  if(full.error) return alert('Could not open: '+full.error.message);
+  downloadRecordPdf(t, id, full.data);
+}
+
+/* ---------- Progress (jobs, with the schedule as a timeline) ---------- */
+let PROG={mode:'list', group:false};
+function pageProgress(){
+  if(!CLIENT) return emptyState('👈','Choose a client','');
+  const jobs=cjobs(); const isClient=VIEW==='client', editor=isEditor()&&!isClient;
+  if(!CJOBS.list) return emptyState('⏳','Loading progress…','One moment.');
+  const withJob=new Set(jobs.map(j=>j.site_id).filter(Boolean));
+  const noJob=(DATA.sites||[]).filter(s=>!withJob.has(s.id) && !s.archived_at);
+  const live=jobs.filter(j=>['live','mobilising'].includes(j.status));
+  const avg=jobs.length?Math.round(jobs.reduce((a,j)=>a+Number(j.progress_pct||0),0)/jobs.length):0;
+  const head=`<div class="sechead"><h3>▦ Progress</h3><span class="sub">${jobs.length} job${jobs.length===1?'':'s'} · ${live.length} live · ${avg}% average</span><span class="line"></span>
+      <div style="display:flex;gap:4px"><button class="edit-btn ${PROG.mode==='list'?'on':''}" onclick="PROG.mode='list';go('sites')">List</button><button class="edit-btn ${PROG.mode==='timeline'?'on':''}" onclick="PROG.mode='timeline';go('sites')">Timeline</button></div>
+      ${PROG.mode==='list'?`<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-left:8px"><input type="checkbox" style="width:auto" ${PROG.group?'checked':''} onchange="PROG.group=this.checked;go('sites')"> Group by site</label>`:''}
+      ${editor?`<button class="addbtn" onclick="openDailyUpdate()">📈 Daily update</button>`:''}</div>`;
+  if(!jobs.length && !noJob.length) return head+emptyState('▦','Nothing to show yet','Jobs appear here once a quote is converted.');
+  const st=s=>{ const x=(typeof JOB_STATUSES!=='undefined'?JOB_STATUSES:[]).find(r=>r[0]===s); return `<span class="chip ${x?x[2]:'grey'}">${esc(x?x[1]:s)}</span>`; };
+  const bar=p=>`<div class="pcell"><div class="pbar ${Number(p)>=100?'green':'cyan'}"><i style="width:${Math.min(100,Number(p)||0)}%"></i></div><b>${Math.round(Number(p)||0)}%</b></div>`;
+  const row=j=>`<tr><td><span class="site-code">${esc(j.job_ref)}</span><div style="font-size:12.5px">${esc(j.title||'')}</div></td><td>${esc(j.site_name||'—')}${j.site_city&&j.site_city!==j.site_name?`<div class="muted" style="font-size:11px">${esc(j.site_city)}</div>`:''}</td>
+    <td>${st(j.status)}${j.behind_plan?' <span class="chip red" style="font-size:10px">Behind plan</span>':''}</td><td style="min-width:150px">${bar(j.progress_pct)}${j.install_pct!=null?`<div class="muted" style="font-size:11px">Latest install report: ${Math.round(j.install_pct)}%</div>`:''}</td>
+    <td style="white-space:nowrap">${j.start_date?jobDate(j.start_date):'TBC'} – ${j.end_date?jobDate(j.end_date):'TBC'}</td>
+    ${editor?`<td style="text-align:right">${j.site_id?`<button class="edit-btn" title="Daily progress update" onclick="openDailyUpdate('${j.site_id}')">📈</button>`:''}</td>`:''}</tr>`;
+  const thead=`<thead><tr><th>Job</th><th>Site</th><th>Status</th><th>Progress</th><th>Start – end</th>${editor?'<th></th>':''}</tr></thead>`;
+  let body;
+  if(PROG.mode==='timeline') body=progTimeline(jobs);
+  else if(PROG.group){
+    const by={}; jobs.forEach(j=>{ const k=j.site_name||'No site'; (by[k]=by[k]||[]).push(j); });
+    body=Object.keys(by).sort().map(k=>`<div class="card" style="margin-bottom:12px"><h4 style="margin:0 0 6px">📍 ${esc(k)}</h4><table>${thead}<tbody>${by[k].map(row).join('')}</tbody></table></div>`).join('');
+  } else body=`<div class="card"><table>${thead}<tbody>${jobs.map(row).join('')}</tbody></table></div>`;
+  const nj=noJob.length?`<div class="card" style="margin-top:12px"><h4 style="margin:0 0 6px">Sites with no job number</h4><div class="muted" style="font-size:12.5px;margin-bottom:6px">Existing sites not yet linked to a job.</div>
+    <table><tbody>${noJob.map(s=>`<tr><td><span class="site-code">${esc(s.name||s.code||'—')}</span></td><td>${esc(s.city||'')}</td><td><span class="chip grey">No job number</span></td><td>${bar(s.progress_pct)}</td>${editor?`<td style="text-align:right"><button class="edit-btn" onclick="openDailyUpdate('${s.id}')">📈</button></td>`:''}</tr>`).join('')}</tbody></table></div>`:'';
+  return head+body+nj;
+}
+function progTimeline(jobs){
+  const dated=jobs.filter(j=>j.start_date||j.end_date);
+  if(!dated.length) return emptyState('📅','No dates yet','Set start and end dates on the jobs to see them on the timeline.');
+  const t=d=>new Date(String(d).slice(0,10)+'T00:00:00').getTime();
+  let lo=Math.min(...dated.map(j=>t(j.start_date||j.end_date))), hi=Math.max(...dated.map(j=>t(j.end_date||j.start_date)));
+  const today=t(ymd(new Date())); lo=Math.min(lo,today); hi=Math.max(hi,today)+86400000; const span=Math.max(hi-lo,86400000*7);
+  const pct=x=>((x-lo)/span*100).toFixed(2);
+  const months=[]; const d=new Date(lo); d.setDate(1); while(d.getTime()<hi){ months.push(new Date(d)); d.setMonth(d.getMonth()+1); }
+  return `<div class="card"><div style="position:relative;margin-left:200px;height:20px;font-size:11px" class="muted">${months.map(m=>`<span style="position:absolute;left:${Math.max(0,pct(m.getTime()))}%">${m.toLocaleDateString('en-GB',{month:'short',year:'2-digit'})}</span>`).join('')}</div>
+    ${dated.map(j=>{ const a=t(j.start_date||j.end_date), b=t(j.end_date||j.start_date)+86400000; const col=j.behind_plan?'#ef4444':j.status==='complete'||Number(j.progress_pct)>=100?'#22c55e':'#38bdf8';
+      return `<div style="display:flex;align-items:center;gap:8px;margin:6px 0"><div style="width:192px;font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"><b>${esc(j.job_ref)}</b> ${esc(j.title||'')}</div>
+        <div style="position:relative;flex:1;height:18px;background:var(--panel2);border-radius:6px">
+          <div style="position:absolute;left:${pct(a)}%;width:${Math.max(0.8,(b-a)/span*100).toFixed(2)}%;top:2px;bottom:2px;border-radius:5px;background:${col}33;border:1px solid ${col}" title="${esc(jobDate(j.start_date)+' – '+jobDate(j.end_date))}"><div style="height:100%;width:${Math.min(100,Number(j.progress_pct)||0)}%;background:${col};border-radius:4px"></div></div>
+          <div style="position:absolute;left:${pct(today)}%;top:-2px;bottom:-2px;width:2px;background:rgba(56,189,248,.95)"></div></div>
+        <div style="width:44px;font-size:12px;text-align:right">${Math.round(Number(j.progress_pct)||0)}%</div></div>`; }).join('')}
+    <div class="muted" style="font-size:11.5px;margin-top:8px">Bars run from the job’s start to end date; the fill is its progress. The blue line is today. Red: an install report said behind plan in the last week.</div></div>`;
+}
+
+/* ---------- Shift Rota from the job Team tabs ---------- */
+let ROTA2={client:null, list:null, err:null, week:null};
+function rotaWeekStart(d){ const x=new Date(d); const k=(x.getDay()+6)%7; x.setDate(x.getDate()-k); x.setHours(0,0,0,0); return x; }
+function pageRotaTeam(){
+  if(!CLIENT) return emptyState('👈','Choose a client','');
+  if(ROTA2.client!==CLIENT.id){ ROTA2={client:CLIENT.id, list:null, err:null, week:ROTA2.week||rotaWeekStart(new Date())}; }
+  if(!ROTA2.week) ROTA2.week=rotaWeekStart(new Date());
+  if(ROTA2.list===null){ if(ROTA2.err) return emptyState('⚠','Could not load the rota',esc(ROTA2.err));
+    const cid=CLIENT.id; sb.rpc('client_team_profiles',{p_client:cid}).then(r=>{ if(ROTA2.client!==cid) return; if(r.error) ROTA2.err=r.error.message; else ROTA2.list=r.data||[]; if(CURRENT==='rota') go('rota'); });
+    return emptyState('⏳','Loading the rota…','One moment.'); }
+  const days=[...Array(7)].map((_,i)=>{ const d=new Date(ROTA2.week); d.setDate(d.getDate()+i); return d; });
+  const ds=days.map(d=>ymd(d)), today=ymd(new Date());
+  const on=(a,d)=>(!a.start||String(a.start)<=d)&&(!a.end||String(a.end)>=d);
+  const people=(ROTA2.list||[]).filter(p=>(p.jobs||[]).some(a=>ds.some(d=>on(a,d))));
+  const nav=n=>{ const d=new Date(ROTA2.week); d.setDate(d.getDate()+7*n); return ymd(d); };
+  const cell=(p,d)=>{ const a=(p.jobs||[]).filter(x=>on(x,d)); return a.length?a.map(x=>`<div class="chip cyan" style="font-size:10.5px;display:block;margin:1px 0;white-space:nowrap" title="${esc((x.title||'')+(x.site?' — '+x.site:''))}">${esc(x.job_ref)}${x.role?' · '+esc(x.role):''}</div>`).join(''):''; };
+  return `<div class="sechead"><h3>📆 Shift Rota</h3><span class="sub">Who is on ${esc(CLIENT.name)}’s jobs each day, from the job teams</span><span class="line"></span>
+      <button class="btn-ghost" onclick="ROTA2.week=new Date('${nav(-1)}T00:00:00');go('rota')">‹ Previous</button>
+      <button class="btn-ghost" onclick="ROTA2.week=rotaWeekStart(new Date());go('rota')">This week</button>
+      <button class="btn-ghost" onclick="ROTA2.week=new Date('${nav(1)}T00:00:00');go('rota')">Next ›</button></div>
+    <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Person</th>${days.map((d,i)=>`<th style="text-align:center;${ds[i]===today?'color:var(--cyan)':''}">${d.toLocaleDateString('en-GB',{weekday:'short'})}<div class="muted" style="font-weight:500">${d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</div></th>`).join('')}</tr></thead>
+      <tbody>${people.map(p=>`<tr><td><b>${esc(p.name)}</b><div class="muted" style="font-size:11px">${esc(p.trade||'Mercury team')}</div></td>${ds.map(d=>`<td style="text-align:center;${d===today?'background:rgba(56,189,248,.06)':''}">${cell(p,d)}</td>`).join('')}</tr>`).join('')
+        || `<tr><td colspan="8" class="muted" style="padding:14px">Nobody is planned onto ${esc(CLIENT.name)}’s jobs this week.</td></tr>`}</tbody></table></div>
+    <div class="note" style="margin-top:8px">People are planned into jobs on each job’s Team tab; this rota shows only people on ${esc(CLIENT.name)}’s jobs.</div>`;
 }
 </script>
 </body>
