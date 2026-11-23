@@ -730,8 +730,7 @@ function renderShell(){
       ${nb('digest','📨','Daily Digest')}
       ${nb('command','🛰','Command Centre')}
       ${nl('💼 Sales')}
-      ${nb('quotes','📥','Quote Requests')}
-      ${nb('requests','🛠','Work Requests')}
+      ${nb('qrequests','📥','Quote Requests')}
       ${nb('crm','🤝','CRM')}
       ${nb('quotereg','📝','Quotes')}
       ${nb('clients','🗂','Clients')}
@@ -796,8 +795,7 @@ function renderShell(){
       ${nb('project','📐','Project Plan')}
       ${nb('completed','🗄','Completed Works')}
       ${nl('Requests')}
-      ${nb('requests','🛠','Request Work')}
-      ${nb('quotes','📝','Request a Quote')}` : '';
+      ${nb('quotes','📝','Quote Request')}` : '';
   /* Engineers (and any other signed-in staff role) keep their existing menu for now */
   const opsNav = `
       <div class="navlabel">Live</div>
@@ -2435,7 +2433,7 @@ async function loadEngHr(){ if(PROFILE.role!=='admin'){ ENGHR=[]; return; } try{
 /* Master engineer registry (the canonical Mercury team list) */
 async function loadEngReg(){ if(PROFILE.role!=='admin'){ ENGREG=[]; return; } try{ const r=await sb.from('engineers').select('*').order('full_name'); ENGREG=(r.data||[]).filter(e=>String(e.engineer_type||'internal')!=='agency'); }catch(e){ ENGREG=[]; } }
 function engRegFor(name){ const k=String(name||'').trim().toLowerCase(); return (ENGREG||[]).find(e=>String(e.full_name||'').trim().toLowerCase()===k)||null; }
-async function loadLogins(){ if(PROFILE.role!=='admin'){ LOGINS=[]; return; } try{ const r=await sb.from('profiles').select('id,email,role,client_id,supplier_id'); LOGINS=r.data||[]; }catch(e){ LOGINS=[]; } }
+async function loadLogins(){ if(PROFILE.role!=='admin'){ LOGINS=[]; return; } try{ const r=await sb.from('profiles').select('id,email,full_name,role,client_id,supplier_id'); LOGINS=r.data||[]; }catch(e){ LOGINS=[]; } }
 
 /* ===== SUPPLIERS: data loaders ===== */
 // Admin: pull every supplier + all their engineers/assignments/timesheets/ratings for the hub & Job Status.
@@ -3363,7 +3361,7 @@ function hqItems(){
   });
   (HQDATA.requests||[]).filter(r=>['New','Reviewing'].includes(String(r.status||''))).forEach(r=>{
     const isQuote=String(r.kind||'work')==='quote';
-    items.push({sev:1,cls:'cyan',cat:isQuote?'Quote request':'Work request',goPage:isQuote?'quotes':'requests',client_id:r.client_id,t:textOnly(r.title||'Work request'),m:r.work_type||'',extra:(r.status||'New')+(r.priority&&r.priority!=='Normal'?(' · '+r.priority):'')});
+    items.push({sev:1,cls:'cyan',cat:isQuote?'Quote request':'Work request',goPage:'qrequests',client_id:r.client_id,t:textOnly(r.title||'Work request'),m:r.work_type||'',extra:(r.status||'New')+(r.priority&&r.priority!=='Normal'?(' · '+r.priority):'')});
   });
   return items.sort((a,b)=>a.sev-b.sev);
 }
@@ -3879,8 +3877,8 @@ const WORK_TYPES=['Planned Maintenance (PPM)','Reactive Maintenance','Breakdown 
 const REQ_DISCIPLINES=['Mechanical','Electrical','Conveyor','Combined M&E','Building Services','FM Hard Services','Other'];
 const REQ_SYSTEMS=['Conveyor & Sortation','Motors / Pumps / Gearboxes','Dock Levellers','Shutters / Doors','Loading Bays','Electrical Containment & Wiring','Emergency Lighting','Racking / Mezzanine','MHE','Other'];
 const REQ_PRIORITY=['Low','Normal','High','Urgent'];
-const REQ_STATUS=['New','Reviewing','Quoted','Accepted','Declined'];
-const reqStatusCls=s=>({'New':'cyan','Reviewing':'amber','Quoted':'violet','Accepted':'green','Declined':'red'}[s]||'grey');
+const REQ_STATUS=['New','Reviewing','Quoted','Won','Lost','Declined'];
+const reqStatusCls=s=>({'New':'cyan','Reviewing':'amber','Quoted':'violet','Won':'green','Accepted':'green','Lost':'red','Declined':'red'}[s]||'grey');
 function sel(id,opts,val){ return `<select id="${id}">${opts.map(o=>`<option ${o===val?'selected':''}>${o}</option>`).join('')}</select>`; }
 
 function openRequestForm(){
@@ -4038,15 +4036,16 @@ async function submitApproveSchedule(reqId){
    from Mercury. Same pipeline as Work Requests (kind='quote').
    =================================================================== */
 function pageQuotes(){
-  const reqs=(DATA.requests||[]).filter(r=>(r.kind||'work')==='quote');
   const isClient=VIEW==='client';
-  const head=`<div class="sechead"><h3>${isClient?'📝 Request a Quote':'📝 Quote Requests'}</h3><span class="sub">${reqs.length} quote request${reqs.length===1?'':'s'}${reqs.filter(r=>r.status==='New').length?` · ${reqs.filter(r=>r.status==='New').length} new`:''}</span><span class="line"></span><button class="addbtn" onclick="openQuoteForm()">＋ New Quote Request</button></div>`;
+  // clients see all their requests here (work and quote requests are one list now)
+  const reqs=(DATA.requests||[]).filter(r=>isClient || (r.kind||'work')==='quote');
+  const head=`<div class="sechead"><h3>${isClient?'📝 Quote Request':'📝 Quote Requests'}</h3><span class="sub">${reqs.length} quote request${reqs.length===1?'':'s'}${reqs.filter(r=>r.status==='New').length?` · ${reqs.filter(r=>r.status==='New').length} new`:''}</span><span class="line"></span><button class="addbtn" onclick="openQuoteForm()">＋ New Quote Request</button></div>`;
   if(!reqs.length) return head+emptyState('📝', isClient?'Request a quote from Mercury':'No quote requests yet', isClient?'For your sales team — tap “New Quote Request”, give us the details of the opportunity and we\'ll come back with a price.':'Quote requests submitted by this client will appear here for pricing.');
   const cards=reqs.map(r=>{
     const photos=(r.media_links||[]).length;
     const statusControl = isEditor()
       ? `<select onchange="updateQuoteStatus('${r.id}',this.value)" style="padding:6px 9px;border-radius:9px;background:var(--panel);border:1px solid var(--line2);color:var(--text);font-family:inherit;font-size:12px;font-weight:700">${REQ_STATUS.map(s=>`<option ${s===r.status?'selected':''}>${s}</option>`).join('')}</select>`
-      : `<span class="chip ${reqStatusCls(r.status)}">${esc(r.status||'New')}</span>`;
+      : `<span class="chip ${reqStatusCls(r.status)}">${esc(r.status==='Accepted'?'Won':(r.status||'New'))}</span>${r.status==='Declined'&&r.decline_reason?`<div style="font-size:12px;margin-top:6px;color:var(--red);max-width:240px;white-space:normal">${esc(r.decline_reason)}</div>`:''}${r.quote_ref&&isClient?`<div class="muted" style="font-size:11px;margin-top:4px">Our ref ${esc(r.quote_ref)}</div>`:''}`;
     const meta=[r.work_type,r.discipline,r.system_type].filter(Boolean).join(' · ');
     const sales=[r.end_customer?('End customer: '+esc(r.end_customer)):'',r.opportunity_ref?('Ref: '+esc(r.opportunity_ref)):'',r.quote_needed_by?('Quote needed by: '+String(r.quote_needed_by).slice(0,10)):''].filter(Boolean).join(' · ');
     const detail = isClient ? (sales?`<div class="muted" style="font-size:12px;margin-top:6px">${sales}</div>`:'') : `<div class="m" style="margin-top:8px">${sales?esc(sales)+'<br>':''}${r.site_address?('📍 '+esc(r.site_address)+'<br>'):''}${r.quantity_scale?('Scale: '+esc(r.quantity_scale)+'<br>'):''}${r.required_start?('Target start: '+String(r.required_start).slice(0,10)+' · '):''}${r.deadline?('Deadline: '+String(r.deadline).slice(0,10)):''}<br>${r.contact_name?('Contact: '+esc(r.contact_name)+(r.contact_phone?(' · '+esc(r.contact_phone)):'')+(r.contact_email?(' · '+esc(r.contact_email)):'')):''}${r.budget_indication?('<br>Budget: '+esc(r.budget_indication)):''}</div>`;
@@ -5140,6 +5139,7 @@ function go(page){
     else if(page==='gallery')html=pageGallery();
     else if(page==='requests')html=pageRequests();
     else if(page==='quotes')html=pageQuotes();
+    else if(page==='qrequests')html=pageQuoteRequests();
     else if(page==='analytics')html=pageAnalytics();
     else if(page==='documents')html=pageDocuments();
     else if(page==='notify')html=pageNotify();
@@ -5351,7 +5351,7 @@ function openJobForm(id){
         <div class="fld"><label>Start date</label><input id="jb_start" ${dis} type="date" value="${esc(String(j.start_date||'').slice(0,10))}"></div>
         <div class="fld"><label>End date</label><input id="jb_end" ${dis} type="date" value="${esc(String(j.end_date||'').slice(0,10))}"></div>
       </div>
-      <div class="fld"><label>Job manager</label><select id="jb_mgr" ${dis}><option value="">— none —</option>${managers.map(m=>`<option value="${m.id}" ${m.id===j.job_manager?'selected':''}>${esc(m.email)}</option>`).join('')}</select></div>
+      <div class="fld"><label>Project Owner / Manager</label><select id="jb_mgr" ${dis}><option value="">— none —</option>${managers.map(m=>`<option value="${m.id}" ${m.id===j.job_manager?'selected':''}>${esc(m.email)}</option>`).join('')}</select></div>
       <div class="fld"><label>Notes</label><textarea id="jb_notes" ${dis} rows="2">${esc(j.notes||'')}</textarea></div>
       ${fromQuote?`<div class="muted" style="font-size:12.5px;margin-top:4px">From quote <a href="#" onclick="event.preventDefault();closeForm();QUOTES=null;go('quotereg')">${esc(j.job_ref)}</a>${j.client_po_ref?' · client PO '+esc(j.client_po_ref):''}</div>`:''}
       ${jobCan('margins.view')&&!isNew?`<div id="jobBudget" style="margin-top:12px"></div>`:''}
@@ -5461,22 +5461,29 @@ async function openJobHistory(id){
    =================================================================== */
 
 let QUOTES=null, QUOTES_ERR=null, QUOTES_LOADING=false, COSTCODES=[];
-let QUOTE_F={status:'open', entity:'all', client:'all', q:''};
+let QUOTE_F={status:'all', entity:'all', client:'all', owner:'all', q:''};
 let QEDIT=null;   // the quote open in the editor: {q, lines, versions}
 
 TITLES.quotereg='Quotes';
 
-const Q_STATUSES=[['pending','Being prepared','grey'],['issued','Issued','cyan'],['accepted','Accepted','green'],['rejected','Rejected','red'],['expired','Expired','amber']];
+const Q_STATUSES=[['lead','Lead','violet'],['pending','Being prepared','grey'],['issued','Issued','cyan'],['accepted','Accepted','green'],['rejected','Lost','red'],['expired','Expired','amber']];
+const LOST_REASONS=[['price','Price'],['timing','Timing / programme'],['competitor','Went with another contractor'],['scope_changed','Scope changed'],['no_response','No response'],['other','Other']];
+const ATT_TYPES=[['supplier_quote','Supplier quote'],['drawing','Drawing'],['specification','Specification'],['photo','Photo'],['client_po','Client PO'],['client_confirmation','Client confirmation'],['correspondence','Correspondence'],['other','Other']];
+const attTypeLabel=t=>(ATT_TYPES.find(x=>x[0]===t)||[t,t])[1];
+const lostLabel=r=>(LOST_REASONS.find(x=>x[0]===r)||[r,r||''])[1];
+function qOwnerName(id){ if(!id) return '—'; const l=(LOGINS||[]).find(x=>x.id===id); return l?(l.full_name||l.email):'—'; }
+function qOwnerOptions(sel){ const staff=(LOGINS||[]).filter(l=>l.role==='admin'); return `<option value="">— none —</option>`+staff.map(m=>`<option value="${m.id}" ${m.id===sel?'selected':''}>${esc(m.full_name||m.email)}</option>`).join(''); }
+const qIsLead=q=>q.status==='lead' || (!q.quote_ref && !!q.lead_ref);
 const LINE_TYPES=[['labour','Labour','LAB'],['materials','Materials','MAT'],['subcontract','Subcontractor','SUB'],['plant','Plant','PLT'],['equipment','Equipment','PLT'],['other','Other','OTH']];
 const Q_DEFAULT_TERMS='All prices exclude VAT. This quotation is valid until the date shown and is subject to Mercury Automated Solutions’ Terms of Business, available on request.';
 
 function qStatusChip(q){
-  if(q.job_id) return `<span class="chip violet">Converted to job</span>`;
-  if(q.status==='accepted') return `<span class="chip green">Accepted · awaiting job</span>`;
+  if(q.job_id) return `<span class="chip green">Converted to job</span>`;
   const x=Q_STATUSES.find(r=>r[0]===q.status)||[q.status,q.status,'grey'];
   return `<span class="chip ${x[2]}">${esc(x[1])}</span>`;
 }
-function qRef(q){ return esc(q.quote_ref)+(q.revision>1?` <span class="muted" style="font-weight:600">rev ${q.revision}</span>`:''); }
+function qRef(q){ if(!q.quote_ref) return esc(q.lead_ref||''); return esc(q.quote_ref)+(q.revision>1?` <span class="muted" style="font-weight:600">rev ${q.revision}</span>`:''); }
+function qRefText(q){ return q.quote_ref||q.lead_ref||''; }
 function qAddDays(n){ const d=new Date(); d.setDate(d.getDate()+n); return ymd(d); }
 function qNum(v){ const n=Number(v); return isFinite(n)?n:0; }
 function qRound(n){ return Math.round(n*100)/100; }
@@ -5514,13 +5521,13 @@ function quoteFiltered(){
   return (QUOTES||[]).filter(x=>{
     if(f.status==='archived') { if(!x.archived_at) return false; }
     else if(x.archived_at) return false;
-    if(f.status==='open' && (x.job_id || !['pending','issued','accepted'].includes(x.status))) return false;
-    if(f.status==='awaiting' && !(x.status==='accepted' && !x.job_id)) return false;
+    if(f.status==='open' && (x.job_id || !['lead','pending','issued','accepted'].includes(x.status))) return false;
+    if(f.owner!=='all' && (x.project_owner||'')!==f.owner) return false;
     if(f.status==='converted' && !x.job_id) return false;
     if(Q_STATUSES.some(s=>s[0]===f.status) && (x.status!==f.status || x.job_id)) return false;
     if(f.entity!=='all' && x.entity_code!==f.entity) return false;
     if(f.client!=='all' && x.client_id!==f.client) return false;
-    if(q && ![x.quote_ref,x.title,x.client_po_ref,x.contact_name,jobClientName(x.client_id),jobSiteName(x.site_id)].some(v=>String(v||'').toLowerCase().includes(q))) return false;
+    if(q && ![x.quote_ref,x.lead_ref,x.title,x.client_po_ref,x.contact_name,jobClientName(x.client_id),jobSiteName(x.site_id)].some(v=>String(v||'').toLowerCase().includes(q))) return false;
     return true;
   });
 }
@@ -5529,16 +5536,18 @@ function quoteSetFilter(k,v){ QUOTE_F[k]=v; const t=el('quoteTable'); if(t){ t.i
 function quoteTableHtml(){
   const rows=quoteFiltered();
   if(!rows.length) return `<div class="empty" style="padding:26px"><div class="big">📝</div><b>No quotes match</b><div style="margin-top:6px;font-size:13px">${(QUOTES||[]).length?'Try a different filter.':(jobCan('quotes.create')?'Tap “＋ New quote” to create the first one.':'No quotes yet.')}</div></div>`;
-  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Q ref</th><th>Quote</th><th>Client</th><th>Co.</th><th>Status</th><th>Valid until</th><th style="text-align:right">Value</th><th></th></tr></thead><tbody>${
+  const conv=jobCan('jobs.convert');
+  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Ref</th><th>Quote</th><th>Client</th><th>Project Owner / Manager</th><th>Status</th><th>Created</th><th>Valid until / follow-up</th><th style="text-align:right">Value</th><th></th></tr></thead><tbody>${
     rows.map(x=>`<tr${x.archived_at?' style="opacity:.6"':''}>
-      <td style="white-space:nowrap"><b>${qRef(x)}</b></td>
+      <td style="white-space:nowrap"><b>${qRef(x)}</b>${x.quote_ref&&x.lead_ref?`<div class="muted" style="font-size:11px">from ${esc(x.lead_ref)}</div>`:''}<div class="muted" style="font-size:11px">${esc(x.entity_code)}</div></td>
       <td>${esc(x.title)}${x.client_po_ref?`<div class="muted" style="font-size:11.5px">PO ${esc(x.client_po_ref)}</div>`:''}</td>
       <td>${esc(jobClientName(x.client_id))}${x.site_id?`<div class="muted" style="font-size:11.5px">${esc(jobSiteName(x.site_id))}</div>`:''}</td>
-      <td>${esc(x.entity_code)}</td>
-      <td>${qStatusChip(x)}${x.archived_at?' <span class="chip grey">Archived</span>':''}</td>
-      <td style="white-space:nowrap">${jobDate(x.valid_until)}</td>
-      <td style="text-align:right;white-space:nowrap">${jobMoney(x.total_sell,x.currency)}</td>
-      <td><button class="btn-ghost" style="padding:5px 10px" onclick="openQuote('${x.id}')">Open</button></td></tr>`).join('')}</tbody></table></div>`;
+      <td style="font-size:12.5px">${esc(qOwnerName(x.project_owner))}</td>
+      <td>${qStatusChip(x)}${x.archived_at?' <span class="chip grey">Archived</span>':''}${x.status==='rejected'&&x.lost_reason?`<div class="muted" style="font-size:11px">${esc(lostLabel(x.lost_reason))}</div>`:''}</td>
+      <td style="white-space:nowrap">${jobDate(String(x.created_at||'').slice(0,10))}</td>
+      <td style="white-space:nowrap">${x.status==='lead'?(x.follow_up_date?'Follow up '+jobDate(x.follow_up_date):'—'):jobDate(x.valid_until)}</td>
+      <td style="text-align:right;white-space:nowrap">${x.status==='lead'?'—':jobMoney(x.total_sell,x.currency)}</td>
+      <td style="white-space:nowrap;text-align:right"><button class="btn-ghost" style="padding:5px 10px" onclick="openQuote('${x.id}')">Open</button>${conv&&!x.job_id&&!x.archived_at&&['issued','expired','accepted'].includes(x.status)?` <button class="btn" style="padding:5px 10px;width:auto" onclick="qConvertFromList('${x.id}')">Convert to job</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
 function pageQuoteRegister(){
@@ -5548,17 +5557,20 @@ function pageQuoteRegister(){
   if(!jobCan('quotes.view')) return emptyState('🔒','No access to quotes','Your staff role does not include quotes. Ask a Director.');
   const live=(QUOTES||[]).filter(x=>!x.archived_at);
   const n=f=>live.filter(f).length;
-  const header=`<div class="sechead"><h3>📝 Quotes</h3><span class="sub">Every job starts as a quote · <span id="quoteCount">${quoteFiltered().length}</span> shown</span><span class="line"></span>${jobCan('quotes.create')?`<button class="addbtn" onclick="openQuote()">＋ New quote</button>`:''}</div>`;
+  const header=`<div class="sechead"><h3>📝 Quotes</h3><span class="sub">Every job starts as a quote · <span id="quoteCount">${quoteFiltered().length}</span> shown</span><span class="line"></span>${jobCan('quotes.create')?`<button class="addbtn" style="margin-right:8px" onclick="openQuote(null,true)">＋ New lead</button><button class="addbtn" onclick="openQuote()">＋ New quote</button>`:''}</div>`;
+  const tile=(ic,l,f,st)=>`<div class="card kpi kpi-link" role="button" tabindex="0" onclick="QUOTE_F.status='${st}';go('quotereg')"><div class="spark">${ic}</div><div class="lbl">${l}</div><div class="val">${n(f)}</div><div class="kpi-go">→</div></div>`;
   const kpis=`<div class="grid kpis" style="margin-bottom:14px">
-    ${kpi('','✏️','Being prepared',n(x=>x.status==='pending'))}
-    ${kpi('','📤','Issued',n(x=>x.status==='issued'))}
-    <div class="card kpi kpi-link" role="button" tabindex="0" onclick="quoteSetFilter('status','awaiting');go('quotereg')"><div class="spark">✅</div><div class="lbl">Accepted · awaiting job</div><div class="val">${n(x=>x.status==='accepted'&&!x.job_id)}</div><div class="kpi-go">→</div></div>
-    ${kpi('','⌛','Expired',n(x=>x.status==='expired'))}</div>`;
+    ${tile('🌱','Leads',x=>x.status==='lead','lead')}
+    ${tile('✏️','Being prepared',x=>x.status==='pending','pending')}
+    ${tile('📤','Issued',x=>x.status==='issued'&&!x.job_id,'issued')}
+    ${tile('✅','Converted to job',x=>!!x.job_id,'converted')}
+    ${tile('⌛','Expired',x=>x.status==='expired','expired')}</div>`;
   const opt=(v,l,cur)=>`<option value="${esc(v)}" ${v===cur?'selected':''}>${esc(l)}</option>`;
   const clientIds=[...new Set((QUOTES||[]).map(x=>x.client_id))];
   const filters=`<div class="card fld" style="padding:12px 14px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-    <input placeholder="Search Q ref, quote, client, contact, PO…" value="${esc(QUOTE_F.q)}" oninput="quoteSetFilter('q',this.value)" style="flex:1;min-width:200px;width:auto">
-    <select style="width:auto" onchange="quoteSetFilter('status',this.value)">${opt('open','Open quotes',QUOTE_F.status)}${opt('awaiting','Accepted · awaiting job',QUOTE_F.status)}${Q_STATUSES.map(s=>opt(s[0],s[1],QUOTE_F.status)).join('')}${opt('converted','Converted to job',QUOTE_F.status)}${opt('all','All',QUOTE_F.status)}${opt('archived','Archived',QUOTE_F.status)}</select>
+    <input placeholder="Search Q or L ref, quote, client, contact, PO…" value="${esc(QUOTE_F.q)}" oninput="quoteSetFilter('q',this.value)" style="flex:1;min-width:200px;width:auto">
+    <select style="width:auto" onchange="quoteSetFilter('status',this.value)">${opt('all','All',QUOTE_F.status)}${opt('open','Open (leads and live quotes)',QUOTE_F.status)}${Q_STATUSES.filter(s=>s[0]!=='accepted').map(s=>opt(s[0],s[1],QUOTE_F.status)).join('')}${opt('converted','Converted to job',QUOTE_F.status)}${opt('archived','Archived',QUOTE_F.status)}</select>
+    <select style="width:auto" onchange="quoteSetFilter('owner',this.value)">${opt('all','All owners',QUOTE_F.owner)}${[...new Set((QUOTES||[]).map(x=>x.project_owner).filter(Boolean))].map(id=>opt(id,qOwnerName(id),QUOTE_F.owner)).join('')}</select>
     <select style="width:auto;max-width:280px" onchange="quoteSetFilter('entity',this.value)">${opt('all','All companies',QUOTE_F.entity)}${JOBREG_ENTITIES.map(e=>opt(e.code,e.code+' — '+e.legal_name,QUOTE_F.entity)).join('')}</select>
     <select style="width:auto" onchange="quoteSetFilter('client',this.value)">${opt('all','All clients',QUOTE_F.client)}${clientIds.map(id=>opt(id,jobClientName(id),QUOTE_F.client)).join('')}</select>
   </div>`;
@@ -5566,9 +5578,10 @@ function pageQuoteRegister(){
 }
 
 /* ---------- the quote editor ---------- */
-async function openQuote(id){
+async function openQuote(id, asLead, preset){
   if(!id){
-    QEDIT={q:{status:'pending',revision:1,valid_until:qAddDays(30),terms:Q_DEFAULT_TERMS}, lines:[], versions:[]};
+    const base=asLead?{status:'lead',revision:1,follow_up_date:qAddDays(7)}:{status:'pending',revision:1,valid_until:qAddDays(30),terms:Q_DEFAULT_TERMS};
+    QEDIT={q:{...base, project_owner:PROFILE.id, ...(preset&&preset.q||{})}, lines:[], versions:[], atts:[], fromRequest:preset&&preset.request||null};
     return renderQuoteModal();
   }
   const q=(QUOTES||[]).find(x=>x.id===id); if(!q) return;
@@ -5584,11 +5597,14 @@ async function openQuote(id){
     if(l.error){ alert('Could not load the quote lines: '+l.error.message); return; }
     lines=l.data||[];
   }
-  QEDIT={q:{...q}, lines:lines.map(x=>({...x})), versions, origLineIds:lines.map(x=>x.id)};
+  const at=await sb.from('commercial_attachments').select('*').eq('quote_id',id).order('created_at');
+  QEDIT={q:{...q}, lines:lines.map(x=>({...x})), versions, origLineIds:lines.map(x=>x.id), atts:at.error?null:(at.data||[])};
   renderQuoteModal();
 }
 
-function qEditable(){ const q=QEDIT.q; return !q.job_id && !q.archived_at && q.status==='pending' && jobCan('quotes.create') && jobCan('margins.view'); }
+function qEditable(){ const q=QEDIT.q; return !q.job_id && !q.archived_at && ['pending','lead'].includes(q.status) && jobCan('quotes.create') && (q.status==='lead' || jobCan('margins.view')); }
+// Project Owner / Manager, follow-up date and internal notes can change at any point until the quote becomes a job
+function qMetaEditable(){ const q=QEDIT.q; return !!q.id && !q.job_id && !q.archived_at && jobCan('quotes.create'); }
 
 function qLineRow(l,i,editable,showCost){
   const codeOpts=COSTCODES.map(c=>`<option value="${c.code}" ${c.code===l.cost_code?'selected':''}>${esc(c.code)}</option>`).join('');
@@ -5627,43 +5643,48 @@ function qSummaryHtml(){
 }
 
 function renderQuoteModal(){
-  const q=QEDIT.q, isNew=!q.id, ed=isNew?jobCan('quotes.create'):qEditable();
+  const q=QEDIT.q, isNew=!q.id, ed=isNew?jobCan('quotes.create'):qEditable(), lead=q.status==='lead';
+  const metaEd=isNew?jobCan('quotes.create'):(ed||qMetaEditable());
   const showCost=jobCan('margins.view'), cur=q.currency||'';
   const dis=ed?'':'disabled';
   const ent=JOBREG_ENTITIES.find(e=>e.code===q.entity_code);
   const old=el('modalBg'); if(old) old.remove();
-  const editLines=ed && showCost;
+  const editLines=ed && showCost && !lead;
   const head=editLines
     ? `<tr><th>Type</th><th>Description</th><th>Qty</th><th>Unit</th><th>Code</th><th>Unit cost</th><th>Pricing</th><th>% / price</th><th style="text-align:right">Line total</th><th></th></tr>`
     : `<tr><th>Type</th><th>Description</th><th style="text-align:right">Qty</th>${showCost?'<th>Code</th><th style="text-align:right">Unit cost</th><th>Pricing</th>':''}<th style="text-align:right">Unit price</th><th style="text-align:right">Total</th></tr>`;
   const lines=QEDIT.lines.map((l,i)=>qLineRow(l,i,editLines,showCost)).join('') || `<tr><td colspan="10" class="muted" style="padding:14px">No lines yet${editLines?' — add the first one below.':'.'}</td></tr>`;
   const acc=q.status==='accepted'||q.job_id ? `<div class="box" style="background:var(--green-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Accepted</b> ${jobDate(q.accepted_on)} by ${esc(q.accepted_by_name||'client')} — ${q.acceptance_method==='purchase_order'?'PO '+esc(q.client_po_ref||''):'written confirmation'}${q.acceptance_note?' · '+esc(q.acceptance_note):''}${q.job_id?` · <b>converted into job ${esc(q.quote_ref)}</b>`:''}</div>` : '';
-  const rej=q.status==='rejected'?`<div class="box" style="background:var(--red-soft,rgba(239,68,68,.12));border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Rejected</b> — ${esc(q.rejected_reason||'')}</div>`:'';
+  const rej=q.status==='rejected'?`<div class="box" style="background:var(--red-soft,rgba(239,68,68,.12));border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Lost</b>${q.lost_reason?' — '+esc(lostLabel(q.lost_reason)):''}${q.rejected_reason?' · '+esc(q.rejected_reason):''}</div>`:'';
+  const fromReq=QEDIT.fromRequest?`<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">From the client’s request <b>${esc(QEDIT.fromRequest.title||'')}</b>. Their details are filled in below${(QEDIT.fromRequest.media_links||[]).length?`, and their ${QEDIT.fromRequest.media_links.length} photo(s) will be added as attachments`:''}.</div>`:'';
   const arch=q.archived_at?`<div class="box" style="background:var(--amber-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Archived</b> ${jobDate(q.archived_at)} — ${esc(q.archive_reason||'')}</div>`:'';
   const vers=(QEDIT.versions||[]).length?`<div class="muted" style="font-size:12px;margin-top:8px">Previous versions: ${QEDIT.versions.map(v=>`<a href="#" onclick="event.preventDefault();qShowVersion(${v.revision})">rev ${v.revision}</a> (${jobDate(v.saved_at)})`).join(' · ')}</div>`:'';
   // action buttons by status
   const b=[];
+  const canQ=jobCan('quotes.create');
   if(!isNew && jobCan('history.view')) b.push(`<button class="btn-ghost" onclick="qHistory()">History</button>`);
-  if(!isNew && q.status!=='pending') b.push(`<button class="btn-ghost" onclick="qDownloadPdf()">⬇ PDF</button>`);
+  if(!isNew && !lead && q.status!=='pending' && q.quote_ref) b.push(`<button class="btn-ghost" onclick="qDownloadPdf()">PDF</button>`);
   if(!isNew && q.status==='pending' && QEDIT.lines.length) b.push(`<button class="btn-ghost" onclick="qPreviewPdf()">Preview PDF</button>`);
-  if(!isNew && !q.job_id && !q.archived_at && jobCan('quotes.create')){
-    if(['issued','rejected','expired'].includes(q.status) || (q.status==='accepted' && jobCan('quotes.approve'))) b.push(`<button class="btn-ghost" onclick="qRevise()">Revise</button>`);
-    if(q.status==='issued') b.push(`<button class="btn-ghost" style="color:var(--red)" onclick="qReject()">Rejected</button>`);
-    if(['issued','expired'].includes(q.status)) b.push(`<button class="btn" onclick="qAcceptForm()">Record acceptance</button>`);
+  if(!isNew && !q.job_id && !q.archived_at && canQ){
+    if(q.quote_ref && (['issued','rejected','expired'].includes(q.status) || (q.status==='accepted' && jobCan('quotes.approve')))) b.push(`<button class="btn-ghost" onclick="qRevise()">Revise</button>`);
+    if(['lead','issued','expired'].includes(q.status)) b.push(`<button class="btn-ghost" style="color:var(--red)" onclick="qLostForm()">Lost</button>`);
   }
-  if(!isNew && !q.job_id && !q.archived_at && jobCan('quotes.create') && q.status!=='accepted') b.push(`<button class="btn-ghost" style="color:var(--red)" onclick="qArchive()">Archive</button>`);
+  if(!isNew && !q.job_id && !q.archived_at && canQ && q.status!=='accepted') b.push(`<button class="btn-ghost" style="color:var(--red)" onclick="qArchive()">Archive</button>`);
   if(q.archived_at && jobCan('records.restore')) b.push(`<button class="btn-ghost" onclick="qRestore()">Restore</button>`);
-  if(q.status==='accepted' && !q.job_id && !q.archived_at && jobCan('jobs.convert')) b.push(`<button class="btn" onclick="qConvertForm()">Convert to job →</button>`);
   if(q.job_id) b.push(`<button class="btn-ghost" onclick="closeForm();JOBREG=null;go('jobreg')">Open jobs</button>`);
-  b.push(`<button class="btn-ghost" onclick="closeForm()">${ed?'Cancel':'Close'}</button>`);
-  if(ed) b.push(`<button class="btn-ghost" id="qeSave" onclick="saveQuote(false)">${isNew?'Create quote':'Save'}</button>`);
-  if(ed && !isNew) b.push(`<button class="btn" id="qeIssue" onclick="saveQuote(true)">Issue quote</button>`);
+  b.push(`<button class="btn-ghost" onclick="closeForm()">${(ed||metaEd)?'Cancel':'Close'}</button>`);
+  if(ed) b.push(`<button class="btn-ghost" id="qeSave" onclick="saveQuote(false)">${isNew?(lead?'Create lead':'Create quote'):'Save'}</button>`);
+  else if(metaEd && !isNew) b.push(`<button class="btn-ghost" id="qeSave" onclick="qSaveMeta()">Save</button>`);
+  if(ed && !isNew && lead) b.push(`<button class="btn" id="qeIssue" onclick="qStartPricing()">Start pricing (give it a Q number) →</button>`);
+  if(ed && !isNew && !lead) b.push(`<button class="btn" id="qeIssue" onclick="saveQuote(true)">Issue quote</button>`);
+  if(!q.job_id && !q.archived_at && ['issued','expired','accepted'].includes(q.status) && jobCan('jobs.convert')) b.push(`<button class="btn" onclick="qConvertForm()">Convert to job →</button>`);
 
   const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal" style="max-width:1180px;width:96vw"><div class="modal-h"><h3>${isNew?'New quote':qRef(q)+' · '+esc(q.title)} ${isNew?'':qStatusChip(q)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+  wrap.innerHTML=`<div class="modal" style="max-width:1180px;width:96vw"><div class="modal-h"><h3>${isNew?(lead?'New lead':'New quote'):qRef(q)+' · '+esc(q.title)} ${isNew?'':qStatusChip(q)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
     <div class="modal-b">
-      ${isNew?`<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">The Q reference is issued when you create the quote and stays with the work for life, through to the job and invoice. The trading company can’t be changed afterwards.</div>`:''}
-      ${acc}${rej}${arch}
+      ${isNew?`<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">${lead?'A lead is possible work that needs following up before it’s priced. It gets an <b>L number</b> now, and its <b>Q number</b> when you start pricing it.':'The Q reference is issued when you create the quote and stays with the work for life, through to the job and invoice.'} The trading company can’t be changed afterwards.</div>`:''}
+      ${lead&&!isNew?`<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">This is a <b>lead</b>: follow it up, then use <b>Start pricing</b> when it needs a price. It takes its Q number at that point.</div>`:''}
+      ${fromReq}${acc}${rej}${arch}
       <div class="frow">
         <div class="fld"><label>Trading company <span class="req">*</span></label>${isNew
           ? `<select id="qe_entity" onchange="qEntityChanged()"><option value="">— choose —</option>${JOBREG_ENTITIES.filter(e=>e.active).map(e=>`<option value="${e.code}" ${e.code===q.entity_code?'selected':''}>${esc(e.code+' — '+e.legal_name)}</option>`).join('')}</select>`
@@ -5681,18 +5702,23 @@ function renderQuoteModal(){
       <div class="fld"><label>Scope / description (printed)</label><textarea id="qe_desc" ${dis} rows="3">${esc(q.description||'')}</textarea></div>
       <div class="frow">
         <div class="fld"><label>Location</label><input id="qe_loc" ${dis} value="${esc(q.location||'')}"></div>
-        <div class="fld"><label>Valid until <span class="req">*</span></label><input id="qe_valid" ${dis} type="date" value="${esc(String(q.valid_until||'').slice(0,10))}"></div>
+        ${lead?'':`<div class="fld"><label>Valid until <span class="req">*</span></label><input id="qe_valid" ${dis} type="date" value="${esc(String(q.valid_until||'').slice(0,10))}"></div>`}
       </div>
-      ${isNew?'':`<div style="margin:6px 0 4px;font-weight:700">Lines</div>
+      <div class="frow">
+        <div class="fld"><label>Project Owner / Manager</label><select id="qe_owner" ${metaEd?'':'disabled'}>${qOwnerOptions(q.project_owner)}</select></div>
+        <div class="fld"><label>Follow-up date${lead?'':' (optional)'}</label><input id="qe_follow" type="date" ${metaEd?'':'disabled'} value="${esc(String(q.follow_up_date||'').slice(0,10))}"></div>
+      </div>
+      ${isNew||lead?'':`<div style="margin:6px 0 4px;font-weight:700">Lines</div>
       <div class="card fld" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead>${head}</thead><tbody id="qLines">${lines}</tbody></table>
         ${editLines?`<div style="padding:8px 4px"><button class="btn-ghost" onclick="qAddLine()">＋ Add line</button></div>`:''}
         <div id="qSummary">${qSummaryHtml()}</div></div>${vers}`}
-      <div class="frow" style="margin-top:12px">
+      ${isNew?'':`<div id="qAttBox">${qAttachmentsHtml()}</div>`}
+      ${lead?'':`<div class="frow" style="margin-top:12px">
         <div class="fld"><label>Notes for the client (printed)</label><textarea id="qe_cnotes" ${dis} rows="2">${esc(q.client_notes||'')}</textarea></div>
         <div class="fld"><label>Terms (printed)</label><textarea id="qe_terms" ${dis} rows="2">${esc(q.terms||'')}</textarea></div>
-      </div>
-      ${showCost?`<div class="fld"><label>Internal notes (never printed)</label><textarea id="qe_inotes" ${(!isNew&&(q.job_id||q.archived_at||!jobCan('quotes.create')))?'disabled':''} rows="2">${esc(q.internal_notes||'')}</textarea></div>`:''}
-      ${isNew?'<div class="muted" style="font-size:12.5px">Create the quote first, then add its lines.</div>':''}
+      </div>`}
+      ${showCost?`<div class="fld"><label>Internal notes (never printed)</label><textarea id="qe_inotes" ${metaEd?'':'disabled'} rows="2">${esc(q.internal_notes||'')}</textarea></div>`:''}
+      ${isNew&&!lead?'<div class="muted" style="font-size:12.5px">Create the quote first, then add its lines and attachments.</div>':''}
     </div>
     <div class="modal-foot" style="flex-wrap:wrap">${b.join('')}</div>
     <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
@@ -5723,7 +5749,10 @@ async function saveQuote(issue){
     contact_name:v('qe_cname')||null, contact_email:v('qe_cemail')||null, description:v('qe_desc')||null,
     location:v('qe_loc')||null, valid_until:v('qe_valid')||null, client_notes:v('qe_cnotes')||null, terms:v('qe_terms')||null };
   if(el('qe_inotes')) head.internal_notes=v('qe_inotes')||null;
-  if(isNew) head.entity_code=v('qe_entity');
+  if(el('qe_owner')) head.project_owner=v('qe_owner')||null;
+  if(el('qe_follow')) head.follow_up_date=v('qe_follow')||null;
+  if(q.status==='lead'){ delete head.valid_until; delete head.client_notes; delete head.terms; }
+  if(isNew){ head.entity_code=v('qe_entity'); if(q.status==='lead') head.status='lead'; if(q.work_request_id) head.work_request_id=q.work_request_id; }
   if(isNew && !head.entity_code) return msg('Choose the trading company.','err');
   if(!head.client_id) return msg('Choose the client.','err');
   if(!head.title) return msg('Give the quote a title.','err');
@@ -5747,6 +5776,11 @@ async function saveQuote(issue){
     let saved;
     if(isNew){
       const r=await sb.from('quotes').insert(head).select().single(); if(r.error) throw r.error; saved=r.data;
+      // photos the client sent with their request become attachments on the quote
+      const links=(QEDIT.fromRequest&&QEDIT.fromRequest.media_links)||[];
+      if(links.length){ const rows=links.filter(Boolean).map((u,i)=>({quote_id:saved.id, doc_type:'photo', title:`Client request photo ${i+1}`, file_url:u, file_name:String(u).split('/').pop().split('?')[0]}));
+        const ra=await sb.from('commercial_attachments').insert(rows); if(ra.error) console.warn('request photos',ra.error); }
+      if(QEDIT.fromRequest && typeof qreqReload==='function') qreqReload();
     } else {
       const r=await sb.from('quotes').update(head).eq('id',q.id).select(); if(r.error) throw r.error;
       if(!r.data||!r.data.length) throw new Error('The change was not saved — you may not have permission.'); saved=r.data[0];
@@ -5772,7 +5806,7 @@ async function saveQuote(issue){
       }
     }
     qStore(saved);
-    msg(isNew?`✓ Created ${saved.quote_ref} — now add its lines.`:(issue?`✓ ${saved.quote_ref} issued.`:'✓ Saved.'),'ok');
+    msg(isNew?(saved.status==='lead'?`✓ Created lead ${saved.lead_ref}.`:`✓ Created ${saved.quote_ref} — now add its lines.`):(issue?`✓ ${saved.quote_ref} issued.`:'✓ Saved.'),'ok');
     setTimeout(()=>{ openQuote(saved.id).then(()=>{ if(CURRENT==='quotereg'){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); } }); }, isNew?700:400);
   }catch(e){ msg('Not saved: '+(e.message||e),'err'); ['qeSave','qeIssue'].forEach(b=>{ const x=el(b); if(x) x.disabled=false; }); }
 }
@@ -5845,28 +5879,35 @@ async function qMakeAndStorePdf(q){
 }
 async function qPreviewPdf(){
   if(!window.jspdf){ alert('PDF tool still loading — try again in a moment.'); return; }
-  try{ const q=QEDIT.q; const doc=qPdfDoc(q, await qLinesForPdf(q.id)); doc.save(`${q.quote_ref}-rev${q.revision}-DRAFT.pdf`); }
-  catch(e){ alert('Could not build the PDF: '+(e.message||e)); }
+  const w=window.open('about:blank','_blank');
+  try{ const q=QEDIT.q; const doc=qPdfDoc(q, await qLinesForPdf(q.id)); qShowPdf(doc, `${q.quote_ref}-rev${q.revision}-DRAFT.pdf`, w); }
+  catch(e){ if(w) w.close(); alert('Could not build the PDF: '+(e.message||e)); }
 }
 async function qDownloadPdf(path){
   const q=QEDIT.q; path=path||q.pdf_path;
+  const w=window.open('about:blank','_blank');   // opened straight away so the browser doesn't block it
   if(path){
-    const r=await sb.storage.from('commercial').createSignedUrl(path, 60);
-    if(!r.error && r.data && r.data.signedUrl){ window.open(r.data.signedUrl,'_blank'); return; }
+    const r=await sb.storage.from('commercial').createSignedUrl(path, 120);
+    if(!r.error && r.data && r.data.signedUrl){ if(w) w.location.href=r.data.signedUrl; else window.open(r.data.signedUrl,'_blank'); return; }
   }
   // no stored copy: rebuild from the quote as it stands
-  if(!window.jspdf){ alert('PDF tool still loading — try again in a moment.'); return; }
-  try{ const doc=qPdfDoc(q, await qLinesForPdf(q.id)); doc.save(`${q.quote_ref}-rev${q.revision}.pdf`); }
-  catch(e){ alert('Could not build the PDF: '+(e.message||e)); }
+  if(!window.jspdf){ if(w) w.close(); alert('PDF tool still loading — try again in a moment.'); return; }
+  try{ const doc=qPdfDoc(q, await qLinesForPdf(q.id)); qShowPdf(doc, `${q.quote_ref}-rev${q.revision}.pdf`, w); }
+  catch(e){ if(w) w.close(); alert('Could not build the PDF: '+(e.message||e)); }
 }
 function qShowVersion(rev){
   const v=(QEDIT.versions||[]).find(x=>x.revision===rev); if(!v) return;
   const s=v.snapshot||{}, q=s.quote||{};
   if(q.pdf_path) return qDownloadPdf(q.pdf_path);
   if(!window.jspdf){ alert('PDF tool still loading.'); return; }
-  qPdfDoc(q, s.lines||[]).save(`${q.quote_ref}-rev${rev}.pdf`);
+  qShowPdf(qPdfDoc(q, s.lines||[]), `${q.quote_ref}-rev${rev}.pdf`, window.open('about:blank','_blank'));
 }
 
+// Show a built PDF in its own tab (falls back to a download if the browser blocks the tab)
+function qShowPdf(doc, name, w){
+  try{ const url=doc.output('bloburl'); if(w){ w.location.href=url; return; } const w2=window.open(url,'_blank'); if(w2) return; }catch(e){}
+  doc.save(name);
+}
 /* ---------- status actions ---------- */
 async function qUpdate(patch, okText){
   const q=QEDIT.q;
@@ -5877,11 +5918,6 @@ async function qUpdate(patch, okText){
   if(CURRENT==='quotereg'){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); }
   return true;
 }
-async function qReject(){
-  const reason=prompt(`Record ${QEDIT.q.quote_ref} as rejected by the client.\n\nReason:`); if(reason===null) return;
-  if(!reason.trim()){ alert('A reason is needed.'); return; }
-  await qUpdate({status:'rejected', rejected_reason:reason.trim()}, '✓ Recorded as rejected.');
-}
 async function qRevise(){
   const q=QEDIT.q;
   if(!confirm(`Create revision ${q.revision+1} of ${q.quote_ref}? The current version (rev ${q.revision}) is kept and the quote reopens for editing.`)) return;
@@ -5891,57 +5927,156 @@ async function qRevise(){
   await openQuote(q.id); msg(`✓ Now on rev ${r.data}. Edit and issue again.`,'ok');
   if(CURRENT==='quotereg'){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); }
 }
-function qAcceptForm(){
+/* ---------- lead → quote, lost, owner/notes ---------- */
+async function qStartPricing(){
+  const q=QEDIT.q;
+  if(!confirm(`Start pricing ${q.lead_ref}? It becomes a quote with the next Q number, ready for its lines.`)) return;
+  // save any edits first, then move it on
+  const v=k=>{ const e=el(k); return e?e.value.trim():''; };
+  const patch={ client_id:v('qe_client')||null, site_id:v('qe_site')||null, title:v('qe_title'), contact_name:v('qe_cname')||null,
+    contact_email:v('qe_cemail')||null, description:v('qe_desc')||null, location:v('qe_loc')||null,
+    project_owner:v('qe_owner')||null, follow_up_date:v('qe_follow')||null, status:'pending', valid_until:qAddDays(30), terms:Q_DEFAULT_TERMS };
+  if(el('qe_inotes')) patch.internal_notes=v('qe_inotes')||null;
+  if(!patch.client_id) return msg('Choose the client.','err');
+  if(!patch.title) return msg('Give it a title.','err');
+  const r=await sb.from('quotes').update(patch).eq('id',q.id).select();
+  if(r.error) return msg('Not moved: '+r.error.message,'err');
+  if(!r.data||!r.data.length) return msg('Not moved — you may not have permission.','err');
+  qStore(r.data[0]); await openQuote(q.id); msg(`✓ Now quote ${r.data[0].quote_ref}. Add its lines and issue it.`,'ok');
+  if(CURRENT==='quotereg'){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); }
+}
+async function qSaveMeta(){
+  const v=k=>{ const e=el(k); return e?e.value.trim():''; };
+  const patch={project_owner:v('qe_owner')||null, follow_up_date:v('qe_follow')||null};
+  if(el('qe_inotes')) patch.internal_notes=v('qe_inotes')||null;
+  await qUpdate(patch,'✓ Saved.');
+}
+function qLostForm(){
   const q=QEDIT.q; closeForm();
   const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal"><div class="modal-h"><h3>Record acceptance · ${esc(q.quote_ref)}${q.revision>1?' rev '+q.revision:''}</h3><button class="modal-x" onclick="closeForm();openQuote('${q.id}')">✕</button></div>
+  wrap.innerHTML=`<div class="modal" style="max-width:520px"><div class="modal-h"><h3>Mark as lost · ${esc(qRefText(q))}</h3><button class="modal-x" onclick="closeForm();openQuote('${q.id}')">✕</button></div>
     <div class="modal-b">
-      <div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">A quote is accepted only with the client’s purchase order or written confirmation. Value accepted: <b>${jobMoney(q.total_sell,q.currency)}</b> (excl. VAT).</div>
-      <div class="fld"><label>Accepted by <span class="req">*</span></label><select id="qa_method" onchange="el('qa_po_row').style.display=this.value==='purchase_order'?'':'none'"><option value="purchase_order">Purchase order</option><option value="written_confirmation">Written confirmation (e.g. email)</option></select></div>
-      <div class="fld" id="qa_po_row"><label>Client PO number <span class="req">*</span></label><input id="qa_po"></div>
-      <div class="frow"><div class="fld"><label>Date received <span class="req">*</span></label><input id="qa_date" type="date" value="${ymd(new Date())}"></div>
-      <div class="fld"><label>Client contact who accepted</label><input id="qa_name" value="${esc(q.contact_name||'')}"></div></div>
-      <div class="fld"><label>Note (e.g. where the PO or email is filed)</label><input id="qa_note"></div>
+      <div class="fld"><label>Why was it lost? <span class="req">*</span></label><select id="ql_reason"><option value="">— choose —</option>${LOST_REASONS.map(r=>`<option value="${r[0]}">${esc(r[1])}</option>`).join('')}</select></div>
+      <div class="fld"><label>Note <span class="muted" style="font-weight:500">(needed for “Other”)</span></label><textarea id="ql_note" rows="2" placeholder="e.g. Client went with a cheaper contractor by about 10%"></textarea></div>
+      <div class="muted" style="font-size:12px">Lost quotes stay on record and feed the win/loss figures. A lost quote can be revised later if the client comes back.</div>
     </div>
-    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm();openQuote('${q.id}')">Cancel</button><button class="btn" id="qaSave" onclick="qAcceptSave()">Record acceptance</button></div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm();openQuote('${q.id}')">Cancel</button><button class="btn" style="background:var(--red)" onclick="qLostSave()">Mark as lost</button></div>
     <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
   document.body.appendChild(wrap);
 }
-async function qAcceptSave(){
-  const v=k=>el(k).value.trim(); const method=v('qa_method');
-  if(method==='purchase_order' && !v('qa_po')) return msg('Enter the client’s PO number.','err');
-  if(!v('qa_date')) return msg('Enter the date it was received.','err');
-  if(method==='written_confirmation' && !v('qa_note')) return msg('Add a note saying where the written confirmation is filed.','err');
+async function qLostSave(){
+  const reason=el('ql_reason').value, note=el('ql_note').value.trim();
+  if(!reason) return msg('Choose why it was lost.','err');
+  if(reason==='other' && !note) return msg('Add a note saying why.','err');
   const q=QEDIT.q;
-  const r=await sb.from('quotes').update({status:'accepted', acceptance_method:method, client_po_ref:method==='purchase_order'?v('qa_po'):null,
-    accepted_on:v('qa_date'), accepted_by_name:v('qa_name')||null, acceptance_note:v('qa_note')||null}).eq('id',q.id).select();
+  const r=await sb.from('quotes').update({status:'rejected', lost_reason:reason, rejected_reason:note||null}).eq('id',q.id).select();
   if(r.error) return msg('Not saved: '+r.error.message,'err');
   if(!r.data||!r.data.length) return msg('Not saved — you may not have permission.','err');
-  qStore(r.data[0]); closeForm(); await openQuote(q.id); msg('✓ Accepted. It can now be converted into a job.','ok');
+  qStore(r.data[0]); closeForm(); await openQuote(q.id); msg('✓ Marked as lost.','ok');
   if(CURRENT==='quotereg'){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); }
 }
+
+/* ---------- attachments ---------- */
+function qAttachmentsHtml(){
+  const q=QEDIT.q, list=QEDIT.atts;
+  const canAdd=jobCan('quotes.create') && !q.archived_at;
+  if(list===null) return `<div class="muted" style="font-size:12.5px;margin-top:12px">Attachments could not be loaded.</div>`;
+  const live=(list||[]).filter(a=>!a.archived_at), gone=(list||[]).filter(a=>a.archived_at);
+  const row=a=>`<tr style="${a.archived_at?'opacity:.55':''}"><td>${esc(attTypeLabel(a.doc_type))}</td><td><b>${esc(a.title)}</b>${a.note?`<div class="muted" style="font-size:11.5px">${esc(a.note)}</div>`:''}${a.archived_at?`<div class="muted" style="font-size:11.5px">Removed — ${esc(a.archive_reason||'')}</div>`:''}</td>
+    <td style="font-size:12px">${esc(qOwnerName(a.created_by))}<div class="muted">${jobDate(String(a.created_at||'').slice(0,10))}</div></td>
+    <td style="white-space:nowrap;text-align:right"><button class="btn-ghost" style="padding:4px 9px" onclick="qOpenAttachment('${a.id}')">Open</button>${canAdd&&!a.archived_at?` <button class="btn-ghost" style="padding:4px 9px;color:var(--red)" onclick="qRemoveAttachment('${a.id}')">Remove</button>`:''}</td></tr>`;
+  return `<div style="margin:14px 0 4px;font-weight:700">Attachments <span class="muted" style="font-weight:500;font-size:12px">· staff only${q.job_id?'':' · carried over to the job when converted'}</span></div>
+    <div class="card fld" style="padding:6px 8px;overflow-x:auto">
+      <table class="tbl" id="qAttTable"><tbody>${live.map(row).join('')||'<tr><td class="muted" style="padding:10px">No attachments yet — add supplier quotes, drawings or specifications.</td></tr>'}${gone.map(row).join('')}</tbody></table>
+      ${canAdd?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 4px">
+        <select id="qa_type" style="width:auto">${ATT_TYPES.map(t=>`<option value="${t[0]}">${esc(t[1])}</option>`).join('')}</select>
+        <input id="qa_title" placeholder="Title (optional)" style="flex:1;min-width:160px;width:auto">
+        <input id="qa_file" type="file" style="width:auto;max-width:260px">
+        <button class="btn-ghost" id="qaAdd" onclick="qAddAttachment()">＋ Add attachment</button></div>`:''}
+    </div>`;
+}
+function qSafeName(n){ return String(n||'file').replace(/[^A-Za-z0-9._-]+/g,'_').slice(-80); }
+async function qUploadCommercial(folder, file){
+  const path=`${folder}/${Date.now()}-${qSafeName(file.name)}`;
+  const up=await sb.storage.from('commercial').upload(path, file, {contentType:file.type||'application/octet-stream', upsert:false});
+  if(up.error) throw up.error;
+  return {storage_path:path, file_name:file.name, mime_type:file.type||null, size_bytes:file.size};
+}
+async function qAddAttachment(){
+  const q=QEDIT.q, f=el('qa_file').files[0];
+  if(!f) return msg('Choose a file to attach.','err');
+  if(f.size>25*1024*1024) return msg('That file is over 25 MB.','err');
+  const b=el('qaAdd'); b.disabled=true; msg('Uploading…');
+  try{
+    const meta=await qUploadCommercial(`quotes/${qRefText(q)}/attachments`, f);
+    const row={quote_id:q.id, doc_type:el('qa_type').value, title:el('qa_title').value.trim()||f.name, ...meta};
+    if(q.job_id) row.job_id=q.job_id;
+    const r=await sb.from('commercial_attachments').insert(row).select();
+    if(r.error) throw r.error;
+    QEDIT.atts=[...(QEDIT.atts||[]), ...(r.data||[])];
+    el('qAttBox').innerHTML=qAttachmentsHtml(); msg('✓ Attached.','ok');
+  }catch(e){ msg('Not attached: '+(e.message||e),'err'); b.disabled=false; }
+}
+async function qOpenAttachment(id){
+  const a=(QEDIT.atts||[]).find(x=>x.id===id); if(!a) return;
+  if(a.file_url){ window.open(a.file_url,'_blank'); return; }
+  const w=window.open('about:blank','_blank');
+  const r=await sb.storage.from('commercial').createSignedUrl(a.storage_path, 120);
+  if(r.error||!r.data){ if(w) w.close(); alert('Could not open: '+(r.error?r.error.message:'')); return; }
+  if(w) w.location.href=r.data.signedUrl; else window.open(r.data.signedUrl,'_blank');
+}
+async function qRemoveAttachment(id){
+  const reason=prompt('Remove this attachment? It stays on record but is hidden from the list.\n\nReason:'); if(reason===null) return;
+  if(!reason.trim()){ alert('A reason is needed.'); return; }
+  const r=await sb.from('commercial_attachments').update({archived_at:new Date().toISOString(), archive_reason:reason.trim()}).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length){ alert('Not removed: '+(r.error?r.error.message:'no permission')); return; }
+  QEDIT.atts=(QEDIT.atts||[]).map(x=>x.id===id?r.data[0]:x); el('qAttBox').innerHTML=qAttachmentsHtml();
+}
+
+/* ---------- convert to job (records the client's PO and attaches it) ---------- */
+async function qConvertFromList(id){ await openQuote(id); qConvertForm(); }
 function qConvertForm(){
   const q=QEDIT.q; closeForm();
-  const managers=(LOGINS||[]).filter(l=>l.role==='admin');
   const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal"><div class="modal-h"><h3>Convert to job · ${esc(q.quote_ref)}</h3><button class="modal-x" onclick="closeForm();openQuote('${q.id}')">✕</button></div>
+  wrap.innerHTML=`<div class="modal" style="max-width:620px"><div class="modal-h"><h3>Convert to job · ${esc(q.quote_ref)}${q.revision>1?' rev '+q.revision:''}</h3><button class="modal-x" onclick="closeForm();openQuote('${q.id}')">✕</button></div>
     <div class="modal-b">
       <div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">
-        Job <b>${esc(q.quote_ref)}</b> will be created for <b>${esc(jobClientName(q.client_id))}</b> with a contract value of <b>${jobMoney(q.total_sell,q.currency)}</b>${q.client_po_ref?` and PO <b>${esc(q.client_po_ref)}</b>`:''}. The quote’s costs become the job’s original budget, which is then locked. This can’t be undone.</div>
-      <div class="fld"><label>Job manager</label><select id="qc_mgr"><option value="">— choose later —</option>${managers.map(m=>`<option value="${m.id}">${esc(m.email)}</option>`).join('')}</select></div>
+        Job <b>${esc(q.quote_ref)}</b> will be created for <b>${esc(jobClientName(q.client_id))}</b> with a contract value of <b>${jobMoney(q.total_sell,q.currency)}</b> (excl. VAT). The quote’s costs become the job’s original budget, which is then locked, and its attachments come with it. This can’t be undone.</div>
+      ${q.status==='accepted'?`<div class="box" style="background:var(--green-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">Acceptance already recorded: ${q.acceptance_method==='purchase_order'?'PO '+esc(q.client_po_ref||''):'written confirmation'} on ${jobDate(q.accepted_on)}. You can still attach the PO below.</div>`:''}
+      <div class="fld"><label>Received <span class="req">*</span></label><select id="qc_method" ${q.status==='accepted'?'disabled':''} onchange="el('qc_po_row').style.display=this.value==='purchase_order'?'':'none'"><option value="purchase_order" ${q.acceptance_method!=='written_confirmation'?'selected':''}>Client purchase order</option><option value="written_confirmation" ${q.acceptance_method==='written_confirmation'?'selected':''}>Written confirmation (e.g. email)</option></select></div>
+      <div class="fld" id="qc_po_row" style="${q.acceptance_method==='written_confirmation'?'display:none':''}"><label>Client PO number <span class="req">*</span></label><input id="qc_po" value="${esc(q.client_po_ref||'')}" ${q.status==='accepted'?'disabled':''}></div>
+      <div class="frow"><div class="fld"><label>Date received <span class="req">*</span></label><input id="qc_date" type="date" value="${esc(String(q.accepted_on||ymd(new Date())).slice(0,10))}" ${q.status==='accepted'?'disabled':''}></div>
+        <div class="fld"><label>Accepted by (client contact)</label><input id="qc_name" value="${esc(q.accepted_by_name||q.contact_name||'')}" ${q.status==='accepted'?'disabled':''}></div></div>
+      <div class="fld"><label>Attach the PO PDF or confirmation email</label><input id="qc_file" type="file"></div>
+      <div class="fld"><label>Note</label><input id="qc_note" value="${esc(q.acceptance_note||'')}" ${q.status==='accepted'?'disabled':''} placeholder="Optional — needed for a written confirmation if nothing is attached"></div>
+      <div class="muted" style="font-size:12.5px">Project Owner / Manager on the job: <b>${esc(qOwnerName(q.project_owner))}</b> (from the quote).</div>
     </div>
     <div class="modal-foot"><button class="btn-ghost" onclick="closeForm();openQuote('${q.id}')">Cancel</button><button class="btn" id="qcGo" onclick="qConvert()">Create job ${esc(q.quote_ref)}</button></div>
     <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
   document.body.appendChild(wrap);
 }
 async function qConvert(){
-  const q=QEDIT.q; const b=el('qcGo'); if(b) b.disabled=true; msg('Creating the job…');
-  const r=await sb.rpc('convert_quote_to_job',{p_quote:q.id, p_job_manager:el('qc_mgr').value||null});
-  if(r.error){ msg('Not converted: '+r.error.message,'err'); if(b) b.disabled=false; return; }
-  const f=await sb.from('quotes').select('*').eq('id',q.id).single(); if(!f.error) qStore(f.data);
-  JOBREG=null;
-  msg(`✓ Job ${q.quote_ref} created.`,'ok');
-  setTimeout(()=>{ closeForm(); go('jobreg'); }, 900);
+  const q=QEDIT.q, v=k=>el(k).value.trim(), method=v('qc_method');
+  if(q.status!=='accepted'){
+    if(method==='purchase_order' && !v('qc_po')) return msg('Enter the client’s PO number.','err');
+    if(!v('qc_date')) return msg('Enter the date it was received.','err');
+  }
+  const f=el('qc_file').files[0];
+  if(q.status!=='accepted' && method==='written_confirmation' && !f && !v('qc_note')) return msg('Attach the confirmation, or add a note saying where it is filed.','err');
+  if(f && f.size>25*1024*1024) return msg('That file is over 25 MB.','err');
+  const b=el('qcGo'); if(b) b.disabled=true;
+  try{
+    let att=null;
+    if(f){ msg('Uploading the attachment…'); att=await qUploadCommercial(`quotes/${q.quote_ref}/attachments`, f); }
+    msg('Creating the job…');
+    const r=await sb.rpc('convert_quote_with_po',{p_quote:q.id, p_method:method, p_po_ref:method==='purchase_order'?v('qc_po'):null,
+      p_received_on:v('qc_date'), p_accepted_by:v('qc_name')||null, p_note:v('qc_note')||null, p_attachment:att});
+    if(r.error) throw r.error;
+    const fr=await sb.from('quotes').select('*').eq('id',q.id).single(); if(!fr.error) qStore(fr.data);
+    JOBREG=null;
+    msg(`✓ Job ${q.quote_ref} created.`,'ok');
+    setTimeout(()=>{ closeForm(); go('jobreg'); }, 900);
+  }catch(e){ msg('Not converted: '+(e.message||e),'err'); if(b) b.disabled=false; }
 }
 async function qArchive(){
   const q=QEDIT.q; const reason=prompt(`Archive ${q.quote_ref}? It leaves the normal lists but is never deleted.\n\nReason:`); if(reason===null) return;
@@ -7412,6 +7547,116 @@ async function xoSaveCodes(){
     const r=await sb.from('cost_codes').update({xero_account_code:v}).eq('code',c.code).select();
     if(r.error||!r.data||!r.data.length) return msg('Not saved: '+(r.error?poFriendlyError(r.error):'no permission'),'err'); } }
   XO=null; go('xero'); setTimeout(()=>msg('✓ Account codes saved.','ok'),900);
+}
+/* ===================================================================
+   QUOTE REQUESTS (office)  —  release 10.
+   Every request clients send (work or quote), across all clients, in one
+   place. Each one becomes a lead, a quote, or is declined with a reason the
+   client sees. Once it has a lead or quote, its status follows that quote
+   automatically: Reviewing → Quoted → Won / Lost.
+   =================================================================== */
+
+let QREQ=null, QREQ_ERR=null, QREQ_LOADING=false;
+let QREQ_F={status:'open', client:'all', kind:'all', q:''};
+TITLES.qrequests='Quote Requests';
+
+const REQ_STATUS_ALL=['New','Reviewing','Quoted','Won','Lost','Declined','Accepted'];
+function qreqStatusChip(s){ const c={'New':'cyan','Reviewing':'amber','Quoted':'violet','Won':'green','Accepted':'green','Lost':'red','Declined':'grey'}[s]||'grey';
+  return `<span class="chip ${c}">${esc(s==='Accepted'?'Won':(s||'New'))}</span>`; }
+
+async function loadQuoteRequests(){
+  if(QREQ_LOADING) return; QREQ_LOADING=true; QREQ_ERR=null;
+  try{
+    await poEnsurePerms();
+    if(QUOTES===null){ await loadQuotes(); }
+    QREQ=await jobFetchAll(()=>sb.from('work_requests').select('*').order('created_at',{ascending:false}));
+  }catch(e){ QREQ_ERR=e.message||String(e); QREQ=null; }
+  QREQ_LOADING=false;
+  if(CURRENT==='qrequests') go('qrequests');
+}
+function qreqReload(){ QREQ=null; if(CURRENT==='qrequests') go('qrequests'); }
+
+function qreqQuoteFor(r){ return (QUOTES||[]).find(q=>q.work_request_id===r.id && !q.archived_at) || null; }
+function qreqFiltered(){
+  const f=QREQ_F, s=f.q.trim().toLowerCase();
+  return (QREQ||[]).filter(r=>{
+    const st=r.status||'New';
+    if(f.status==='open' && !['New','Reviewing'].includes(st)) return false;
+    if(f.status!=='open' && f.status!=='all' && !(st===f.status || (f.status==='Won' && st==='Accepted'))) return false;
+    if(f.client!=='all' && r.client_id!==f.client) return false;
+    if(f.kind!=='all' && (r.kind||'work')!==f.kind) return false;
+    if(s && ![r.title,r.scope,r.site_name,r.site_address,r.contact_name,r.end_customer,r.opportunity_ref,r.quote_ref,jobClientName(r.client_id)].some(v=>String(v||'').toLowerCase().includes(s))) return false;
+    return true;
+  });
+}
+function qreqSet(k,v){ QREQ_F[k]=v; const b=el('qreqList'); if(b) b.innerHTML=qreqListHtml(); else go('qrequests'); }
+
+function pageQuoteRequests(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','');
+  if(QREQ===null){ if(QREQ_ERR) return emptyState('⚠','Could not load requests', esc(QREQ_ERR)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="QREQ_ERR=null;qreqReload()">Try again</button></div>`); loadQuoteRequests(); return emptyState('⏳','Loading requests…','One moment.'); }
+  const all=QREQ||[], n=f=>all.filter(f).length;
+  const tile=(ic,l,v,st)=>`<div class="card kpi kpi-link" role="button" tabindex="0" onclick="QREQ_F.status='${st}';go('qrequests')"><div class="spark">${ic}</div><div class="lbl">${l}</div><div class="val">${v}</div><div class="kpi-go">→</div></div>`;
+  const kpis=`<div class="grid kpis" style="margin-bottom:14px">
+    ${tile('📥','New',n(r=>(r.status||'New')==='New'),'New')}
+    ${tile('🔎','Reviewing',n(r=>r.status==='Reviewing'),'Reviewing')}
+    ${tile('📤','Quoted',n(r=>r.status==='Quoted'),'Quoted')}
+    ${tile('🏆','Won',n(r=>['Won','Accepted'].includes(r.status)),'Won')}</div>`;
+  const opt=(v,l,cur)=>`<option value="${esc(v)}" ${v===cur?'selected':''}>${esc(l)}</option>`;
+  const clientIds=[...new Set(all.map(r=>r.client_id))];
+  const filters=`<div class="card fld" style="padding:12px 14px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+    <input placeholder="Search title, site, contact, client, reference…" value="${esc(QREQ_F.q)}" oninput="qreqSet('q',this.value)" style="flex:1;min-width:200px;width:auto">
+    <select style="width:auto" onchange="qreqSet('status',this.value)">${opt('open','To action (New, Reviewing)',QREQ_F.status)}${opt('all','All',QREQ_F.status)}${['New','Reviewing','Quoted','Won','Lost','Declined'].map(s=>opt(s,s,QREQ_F.status)).join('')}</select>
+    <select style="width:auto" onchange="qreqSet('client',this.value)">${opt('all','All clients',QREQ_F.client)}${clientIds.map(id=>opt(id,jobClientName(id),QREQ_F.client)).join('')}</select>
+    <select style="width:auto" onchange="qreqSet('kind',this.value)">${opt('all','Quote and work requests',QREQ_F.kind)}${opt('quote','Quote requests',QREQ_F.kind)}${opt('work','Work requests',QREQ_F.kind)}</select></div>`;
+  return `<div class="sechead"><h3>📥 Quote Requests</h3><span class="sub">Requests from clients’ portals, across all clients. Make each one a lead or a quote, or decline it.</span><span class="line"></span><button class="btn-ghost" onclick="QUOTES=null;qreqReload()">Refresh</button></div>`
+    +kpis+filters+`<div id="qreqList">${qreqListHtml()}</div>`;
+}
+function qreqListHtml(){
+  const rows=qreqFiltered();
+  if(!rows.length) return `<div class="card">${emptyState('📥','Nothing here','No requests match this filter.')}</div>`;
+  const canQ=jobCan('quotes.create');
+  return rows.map(r=>{
+    const q=qreqQuoteFor(r), st=r.status||'New';
+    const meta=[(r.kind||'work')==='quote'?'Quote request':'Work request', r.work_type, r.discipline, r.system_type].filter(Boolean).join(' · ');
+    const sales=[r.end_customer?'End customer: '+r.end_customer:'', r.opportunity_ref?'Their ref: '+r.opportunity_ref:'', r.quote_needed_by?'Quote needed by '+jobDate(r.quote_needed_by):''].filter(Boolean).join(' · ');
+    const where=[r.site_name, r.site_address].filter(Boolean).join(' — ');
+    const acts=[];
+    if(q) acts.push(`<button class="btn-ghost" style="padding:5px 10px" onclick="qreqOpenQuote('${q.id}')">Open ${esc(qRefText(q))}</button>`);
+    else if(canQ && ['New','Reviewing'].includes(st)){
+      acts.push(`<button class="btn-ghost" style="padding:5px 10px" onclick="qreqCreate('${r.id}',true)">Create lead</button>`);
+      acts.push(`<button class="btn" style="padding:5px 10px;width:auto" onclick="qreqCreate('${r.id}',false)">Create quote</button>`);
+    }
+    if(canQ && !q && ['New','Reviewing'].includes(st)) acts.push(`<button class="btn-ghost" style="padding:5px 10px;color:var(--red)" onclick="qreqDecline('${r.id}')">Decline</button>`);
+    return `<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:14.5px">${esc(r.title||'Request')}</b>${qreqStatusChip(st)}${r.quote_ref?`<span class="chip grey">${esc(r.quote_ref)}</span>`:''}${r.priority&&r.priority!=='Normal'?`<span class="chip ${['Urgent','High'].includes(r.priority)?'amber':'grey'}">${esc(r.priority)}</span>`:''}</div>
+        <div class="muted" style="font-size:12px;margin-top:3px"><b>${esc(jobClientName(r.client_id))}</b> · ${esc(meta)} · received ${jobDate(String(r.created_at||'').slice(0,10))}${r.submitted_by?' from '+esc(r.submitted_by):''}</div>
+        ${r.scope?`<div style="font-size:13px;margin-top:8px;white-space:pre-line">${esc(r.scope)}</div>`:''}
+        <div class="muted" style="font-size:12px;margin-top:6px">${[where?'📍 '+esc(where):'', r.quantity_scale?'Scale: '+esc(r.quantity_scale):'', sales?esc(sales):'', r.required_start?'Start: '+jobDate(r.required_start):'', r.contact_name?'Contact: '+esc([r.contact_name,r.contact_phone,r.contact_email].filter(Boolean).join(', ')):''].filter(Boolean).join('<br>')}</div>
+        ${st==='Declined'&&r.decline_reason?`<div style="font-size:12.5px;margin-top:6px;color:var(--red)">Declined: ${esc(r.decline_reason)}</div>`:''}
+        ${(r.media_links||[]).length?`<div class="muted" style="font-size:11px;margin-top:8px">📷 ${r.media_links.length} attachment(s) from the client</div>${reqPhotoStrip(r.media_links)}`:''}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${acts.join('')}</div></div></div>`;
+  }).join('');
+}
+async function qreqOpenQuote(id){ if(QUOTES===null) await loadQuotes(); openQuote(id); }
+async function qreqCreate(id, asLead){
+  const r=(QREQ||[]).find(x=>x.id===id); if(!r) return;
+  if(QUOTES===null) await loadQuotes();
+  const desc=[r.scope, r.quantity_scale?'Scale: '+r.quantity_scale:'', r.site_access?'Access: '+r.site_access:'', r.out_of_hours?'Out-of-hours / weekend work needed.':'', r.survey_required?'Site survey required first.':''].filter(Boolean).join('\n');
+  const notes=[r.end_customer?'End customer: '+r.end_customer:'', r.opportunity_ref?'Client reference: '+r.opportunity_ref:'', r.quote_needed_by?'Quote needed by '+r.quote_needed_by:'', r.budget_indication?'Budget indication: '+r.budget_indication:'', r.drawings_available?'Drawings: '+r.drawings_available:'', r.notes||''].filter(Boolean).join('\n');
+  const entity=(JOBREG_ENTITIES.find(e=>e.code==='UK')||JOBREG_ENTITIES[0]||{}).code;
+  openQuote(null, asLead, {request:r, q:{client_id:r.client_id, title:r.title, description:desc||null, location:[r.site_name,r.site_address].filter(Boolean).join(', ')||null,
+    contact_name:r.contact_name||null, contact_email:r.contact_email||null, internal_notes:notes||null, work_request_id:r.id, entity_code:entity}});
+}
+async function qreqDecline(id){
+  const r=(QREQ||[]).find(x=>x.id===id); if(!r) return;
+  const reason=prompt(`Decline “${r.title}”?\n\nThe client will see this reason in their portal:`); if(reason===null) return;
+  if(!reason.trim()){ alert('A reason is needed — the client will see it.'); return; }
+  const u=await sb.from('work_requests').update({status:'Declined', decline_reason:reason.trim(), declined_at:new Date().toISOString(), declined_by:PROFILE.id}).eq('id',id).select();
+  if(u.error||!u.data||!u.data.length){ alert('Not saved: '+(u.error?u.error.message:'no permission')); return; }
+  try{ await notifyClient(r.client_id,'quote','Request declined: '+(r.title||'your request'),'quotes','We’re not able to take this one on: '+reason.trim()); }catch(e){}
+  qreqReload();
 }
 </script>
 </body>
