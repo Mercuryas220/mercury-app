@@ -751,7 +751,6 @@ function renderShell(){
       ${nb('xero','🔄','Send to Xero')}
       ${nl('👷 People &amp; Suppliers')}
       ${nb('engineers','👷','Engineers')}
-      ${nb('labour','⏱','Labour &amp; rates')}
       ${nb('compliance','🛡','Compliance')}
       ${nb('suppliers','🚚','Suppliers')}
       ${nl('📈 Reports &amp; Insights')}
@@ -766,7 +765,7 @@ function renderShell(){
       ${nb('sites','▦','Progress')}
       ${nb('schedule','▤','Schedule')}
       ${nb('rota','📆','Shift Rota')}
-      ${nb('teams','⛺','Teams &amp; Routes')}
+      ${nb('teams','👥','Site Team Profiles')}
       ${nb('callouts','🔧','Call-Out Reports')}
       ${nb('shifts','🗓','Shift Reports')}
       ${nb('installs','🔩','Install Reports')}
@@ -788,7 +787,7 @@ function renderShell(){
       <button class="nav-btn active" data-page="overview"><span class="ic">◫</span> Overview</button>
       ${nb('sites','▦','Progress')}
       ${nb('schedule','▤','Schedule')}
-      ${nb('teams','⛺','Teams &amp; Routes')}
+      ${nb('teams','👥','Site Team Profiles')}
       ${nb('rota','📆','Shift Rota')}
       ${nl('Reports')}
       ${nb('callouts','🔧','Call-Out Reports')}
@@ -1547,25 +1546,28 @@ async function submitMoveToAgency(name){
 function complianceItems(){
   const out=[];
   const push=(o)=>{ const st=cardStatus(o.expiry); if(o.c==null) o.c=st.c; if(o.label==null) o.label=st.label; o.days = o.expiry? Math.ceil((new Date(o.expiry)-Date.now())/86400000) : null; out.push(o); };
-  // internal competency cards (from team rosters)
-  (HQDATA&&HQDATA.teams?HQDATA.teams:[]).forEach(t=>{ (Array.isArray(t.roster)?t.roster:[]).forEach(e=>{ if(!e||!e.name) return; (Array.isArray(e.cards)?e.cards:[]).forEach(c=>{ if(c&&c.type&&c.expiry) push({who:e.name,type:'Engineer',cat:'Card',subject:c.type,expiry:c.expiry,extra:''}); }); }); });
+  // cards & competencies on each person's record (release 14)
+  const wById={}; (PPL&&PPL.workers||[]).forEach(w=>{ wById[w.id]=w; });
+  const wByEng={}, wBySeng={}; (PPL&&PPL.workers||[]).forEach(w=>{ if(w.engineer_id) wByEng[w.engineer_id]=w; if(w.supplier_engineer_id) wBySeng[w.supplier_engineer_id]=w; });
+  const tLabel=w=>w&&w.worker_type==='agency'?'Agency':'Engineer';
+  (PPL&&PPL.cards||[]).forEach(c=>{ const w=wById[c.worker_id]; if(!w||!c.expiry||(typeof pplActive==='function'&&!pplActive(w))) return;
+    push({who:w.full_name,type:tLabel(w),cat:'Card',subject:c.card_type,expiry:c.expiry,extra:w.supplier_id&&w.worker_type!=='employed'?pplSupplierName(w.supplier_id):'',act:`openPersonRecord('${w.id}','cards')`}); });
   // internal travel docs (engineer_hr)
-  (ENGHR||[]).forEach(h=>{ const nm=h.full_name||'';
-    if(h.a1_expiry) push({who:nm,type:'Engineer',cat:'A1 certificate',subject:'A1',expiry:h.a1_expiry,extra:''});
-    if(h.medical_expiry) push({who:nm,type:'Engineer',cat:'Medical insurance',subject:h.medical_provider||'Medical',expiry:h.medical_expiry,extra:''});
-    if(h.passport_expiry) push({who:nm,type:'Engineer',cat:'Passport',subject:'Passport',expiry:h.passport_expiry,extra:''});
+  (ENGHR||[]).forEach(h=>{ const nm=h.full_name||''; const w=h.engineer_id?wByEng[h.engineer_id]:null; const act=w?`openPersonRecord('${w.id}','safety')`:'';
+    if(h.a1_expiry) push({who:nm,type:'Engineer',cat:'A1 certificate',subject:'A1',expiry:h.a1_expiry,extra:'',act});
+    if(h.medical_expiry) push({who:nm,type:'Engineer',cat:'Medical insurance',subject:h.medical_provider||'Medical',expiry:h.medical_expiry,extra:'',act});
+    if(h.passport_expiry) push({who:nm,type:'Engineer',cat:'Passport',subject:'Passport',expiry:h.passport_expiry,extra:'',act});
   });
-  // agency engineers (cards + travel + right-to-work)
-  (SDATA.engineers||[]).forEach(e=>{ const sup=((SUPPLIERS||[]).find(s=>s.id===e.supplier_id)||{}).name||'Agency';
-    (Array.isArray(e.cards)?e.cards:[]).forEach(c=>{ if(c&&c.type&&c.expiry) push({who:e.full_name,type:'Agency',cat:'Card',subject:c.type,expiry:c.expiry,extra:sup}); });
-    if(e.a1_expiry) push({who:e.full_name,type:'Agency',cat:'A1 certificate',subject:'A1',expiry:e.a1_expiry,extra:sup});
-    if(e.medical_expiry) push({who:e.full_name,type:'Agency',cat:'Medical insurance',subject:e.medical_provider||'Medical',expiry:e.medical_expiry,extra:sup});
-    if(e.passport_expiry) push({who:e.full_name,type:'Agency',cat:'Passport',subject:'Passport',expiry:e.passport_expiry,extra:sup});
-    if(e.rtw_status==='Expired') out.push({who:e.full_name,type:'Agency',cat:'Right to work',subject:'RTW expired',expiry:null,extra:sup,c:'red',label:'expired',days:null});
-    else if(e.rtw_status==='Not checked') out.push({who:e.full_name,type:'Agency',cat:'Right to work',subject:'RTW not checked',expiry:null,extra:sup,c:'amber',label:'check',days:null});
+  // agency engineers (travel + right-to-work; their cards are on their record above)
+  (SDATA.engineers||[]).forEach(e=>{ const sup=((SUPPLIERS||[]).find(s=>s.id===e.supplier_id)||{}).name||'Agency'; const w=wBySeng[e.id]; const act=w?`openPersonRecord('${w.id}','safety')`:'';
+    if(e.a1_expiry) push({who:e.full_name,type:'Agency',cat:'A1 certificate',subject:'A1',expiry:e.a1_expiry,extra:sup,act});
+    if(e.medical_expiry) push({who:e.full_name,type:'Agency',cat:'Medical insurance',subject:e.medical_provider||'Medical',expiry:e.medical_expiry,extra:sup,act});
+    if(e.passport_expiry) push({who:e.full_name,type:'Agency',cat:'Passport',subject:'Passport',expiry:e.passport_expiry,extra:sup,act});
+    if(e.rtw_status==='Expired') out.push({who:e.full_name,type:'Agency',cat:'Right to work',subject:'RTW expired',expiry:null,extra:sup,c:'red',label:'expired',days:null,act});
+    else if(e.rtw_status==='Not checked') out.push({who:e.full_name,type:'Agency',cat:'Right to work',subject:'RTW not checked',expiry:null,extra:sup,c:'amber',label:'check',days:null,act});
   });
   // supplier company documents
-  (SDATA.documents||[]).forEach(d=>{ const sup=((SUPPLIERS||[]).find(s=>s.id===d.supplier_id)||{}).name||'Supplier'; if(d.expiry) push({who:sup,type:'Supplier',cat:d.doc_type||'Document',subject:d.label,expiry:d.expiry,extra:''}); });
+  (SDATA.documents||[]).forEach(d=>{ const sup=((SUPPLIERS||[]).find(s=>s.id===d.supplier_id)||{}).name||'Supplier'; if(d.expiry) push({who:sup,type:'Supplier',cat:d.doc_type||'Document',subject:d.label,expiry:d.expiry,extra:/insur|liabil/i.test((d.doc_type||'')+' '+(d.label||''))?'Expired insurance stops POs being issued':'',act:`go('suppliers')`}); });
   // client documents
   (HQDATA&&HQDATA.documents?HQDATA.documents:[]).forEach(d=>{ if(d.expiry_date) push({who:clientName(d.client_id),type:'Client doc',cat:d.doc_type||'Document',subject:d.title,expiry:d.expiry_date,extra:''}); });
   // sort: red first, then soonest expiry
@@ -1602,7 +1604,8 @@ let COMP={view:'attention',type:'all'};
 function pageCompliance(){
   if(PROFILE.role!=='admin') return emptyState('🔒','Admins only','This is the Mercury compliance view.');
   if(!HQDATA) return emptyState('⏳','Loading…','One moment…');
-  return `<div class="sechead"><h3>🛡 Compliance — Expiries &amp; Right to Work</h3><span class="sub">Every ticket, certificate, insurance &amp; right-to-work across your team, agency &amp; suppliers</span><span class="line"></span><button class="addbtn reportbtn" onclick="loadHQ().then(()=>loadSuppliers()).then(()=>go('compliance'))">↻ Refresh</button></div><div id="compBox">${compInner()}</div>`;
+  if(PPL===null){ if(!PPL_ERR) pplLoad(); else return emptyState('⚠','Could not load the people register',esc(PPL_ERR)); return emptyState('⏳','Loading…','One moment…'); }
+  return `<div class="sechead"><h3>🛡 Compliance — Expiries &amp; Right to Work</h3><span class="sub">Every ticket, certificate, insurance &amp; right-to-work across your team, agency &amp; suppliers</span><span class="line"></span><button class="addbtn reportbtn" onclick="PPL=null;loadHQ().then(()=>loadSuppliers()).then(()=>go('compliance'))">↻ Refresh</button></div><div id="compBox">${compInner()}</div>`;
 }
 function compSet(k,v){ COMP[k]=v; const b=el('compBox'); if(b) b.innerHTML=compInner(); }
 function compInner(){
@@ -1626,8 +1629,8 @@ function compInner(){
   const controls=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${vBtn('attention','Needs attention')}${vBtn('expired','Expired')}${vBtn('expiring','Expiring')}${vBtn('all','All')}<span style="width:10px"></span>${tBtn('all','Everyone')}${tBtn('Engineer','Engineers')}${tBtn('Agency','Agency')}${tBtn('Supplier','Suppliers')}${tBtn('Client doc','Client docs')}</div>`;
   const dfmt=w=>{ if(!w) return '—'; const d=new Date(w); return isNaN(d)?'—':d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); };
   const daysTxt=x=>{ if(x.days==null) return x.label?('· '+x.label):''; if(x.days<0) return 'expired '+(-x.days)+'d ago'; if(x.days===0) return 'expires today'; return 'in '+x.days+'d'; };
-  const table = rows.length ? `<div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Status</th><th>Who</th><th>Item</th><th>Category</th><th>Type</th><th>Expiry</th></tr></thead><tbody>
-    ${rows.slice(0,400).map(x=>`<tr><td><span class="rag rag-${x.c==='red'?'red':x.c==='amber'?'amber':'green'}"></span></td><td><b>${esc(x.who||'—')}</b>${x.extra?`<div class="muted" style="font-size:11px">${esc(x.extra)}</div>`:''}</td><td>${esc(x.subject||'—')}</td><td>${esc(x.cat||'')}</td><td><span class="chip ${x.type==='Agency'?'grey':x.type==='Supplier'?'violet':x.type==='Client doc'?'cyan':'green'}" style="font-size:10px">${esc(x.type)}</span></td><td>${dfmt(x.expiry)} <span class="muted" style="font-size:11px">${esc(daysTxt(x))}</span></td></tr>`).join('')}
+  const table = rows.length ? `<div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Status</th><th>Who</th><th>Item</th><th>Category</th><th>Type</th><th>Expiry</th><th></th></tr></thead><tbody>
+    ${rows.slice(0,400).map(x=>`<tr><td><span class="rag rag-${x.c==='red'?'red':x.c==='amber'?'amber':'green'}"></span></td><td><b>${esc(x.who||'—')}</b>${x.extra?`<div class="muted" style="font-size:11px">${esc(x.extra)}</div>`:''}</td><td>${esc(x.subject||'—')}</td><td>${esc(x.cat||'')}</td><td><span class="chip ${x.type==='Agency'?'grey':x.type==='Supplier'?'violet':x.type==='Client doc'?'cyan':'green'}" style="font-size:10px">${esc(x.type)}</span></td><td>${dfmt(x.expiry)} <span class="muted" style="font-size:11px">${esc(daysTxt(x))}</span></td><td style="text-align:right">${x.act?`<button class="btn-ghost" style="padding:4px 9px" onclick="${x.act}">Open →</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>` : `<div class="card"><div class="empty" style="padding:16px"><div class="big">✅</div><b>Nothing ${COMP.view==='expired'?'expired':COMP.view==='expiring'?'expiring':'needs attention'}</b><div style="font-size:13px;margin-top:4px">You're all compliant for this filter.</div></div></div>`;
   return k+controls+table;
 }
@@ -2692,9 +2695,10 @@ async function submitCheckIn(){
    DOWNLOAD ANY REPORT AS PDF  — opens the stored PDF if present, else
    builds a branded one from the record (works for imported records too).
    =================================================================== */
-async function downloadRecordPdf(type,id){
+async function downloadRecordPdf(type,id,given){
   const map={callout:DATA.callouts,shift:DATA.shifts,daily:DATA.daily,request:DATA.requests,quote:DATA.requests,install:DATA.progress};
-  const rec=(map[type]||[]).find(r=>r.id===id); if(!rec){ alert('Report not found.'); return; }
+  const rec=given||(map[type]||[]).find(r=>r.id===id); if(!rec){ alert('Report not found.'); return; }
+  const recClient=((CLIENTS||[]).find(c=>c.id===rec.client_id)||CLIENT||{});
   if(rec.pdf_url){ window.open(rec.pdf_url,'_blank'); return; }
   if(!window.jspdf){ alert('PDF tool still loading — try again in a moment.'); return; }
   const titleMap={callout:'Call-Out Report',shift:'Shift Report',daily:'Daily Site Report',request:'Work Request',install:'Install Report',quote:'Quote Request'};
@@ -2706,7 +2710,7 @@ async function downloadRecordPdf(type,id){
     daily:[['Date',rec.report_date||rec.submitted_at],['Supervisor',rec.supervisor],['Status',rec.status],['Progress %',rec.progress_pct],['Work completed',rec.work_completed],['Planned tomorrow',rec.work_planned_tomorrow],['Blockers',rec.blockers],['Hours',rec.hours_worked]],
     request:[['Title',rec.title],['Type',rec.work_type],['Discipline',rec.discipline],['System',rec.system_type],['Priority',rec.priority],['Scope',rec.scope],['Quantity / scale',rec.quantity_scale],['Site',rec.site_address],['Access',rec.site_access],['Required start',rec.required_start],['Deadline',rec.deadline],['Drawings',rec.drawings_available],['Budget',rec.budget_indication],['Contact',[rec.contact_name,rec.contact_phone,rec.contact_email].filter(Boolean).join(' · ')],['Status',rec.status],['Notes',rec.notes]],
     install:[['Date',rec.report_date||rec.submitted_at],['Site',site.code||site.city],['Discipline',rec.discipline],['Engineer',rec.engineer],['Progress %',rec.progress_pct],['Plan status',rec.plan_flag],['Planned days',rec.planned_days],['Actual days',rec.actual_days],['Hours worked',rec.hours_worked],['Headcount',rec.headcount],['Work completed',rec.work_completed],['Materials / plant',rec.materials],['Issues / delays',rec.issues||rec.delay_reason],['Planned next visit',rec.next_steps]],
-    quote:[['Quote title',rec.title],['End customer',rec.end_customer],['Reference',rec.opportunity_ref],['Discipline',rec.discipline],['System',rec.system_type],['Scope',rec.scope],['Quantity / scale',rec.quantity_scale],['Site',rec.site_address],['Quote needed by',rec.quote_needed_by||rec.deadline],['Target start',rec.required_start],['Drawings',rec.drawings_available],['Budget / target',rec.budget_indication],['Contact',[rec.contact_name,rec.contact_phone,rec.contact_email].filter(Boolean).join(' · ')],['Status',rec.status],['Notes',rec.notes]]
+    quote:[['Received',jobDate(String(rec.created_at||'').slice(0,10))+(rec.submitted_by?' from '+rec.submitted_by:'')],['Our reference',rec.quote_ref],['Quote title',rec.title],['Request type',(rec.kind||'work')==='quote'?'Quote request':'Work request'],['Work type',rec.work_type],['Priority',rec.priority!=='Normal'?rec.priority:''],['Site name',rec.site_name],['End customer',rec.end_customer],['Reference',rec.opportunity_ref],['Discipline',rec.discipline],['System',rec.system_type],['Scope',rec.scope],['Quantity / scale',rec.quantity_scale],['Site',rec.site_address],['Quote needed by',rec.quote_needed_by||rec.deadline],['Target start',rec.required_start],['Drawings',rec.drawings_available],['Budget / target',rec.budget_indication],['Contact',[rec.contact_name,rec.contact_phone,rec.contact_email].filter(Boolean).join(' · ')],['Status',rec.status==='Accepted'?'Won':(rec.status||'New')],['Declined because',rec.status==='Declined'?rec.decline_reason:''],['Site access',rec.site_access],['Out of hours',rec.out_of_hours?'Yes':''],['Survey required',rec.survey_required?'Yes':''],['Notes',rec.notes]]
   }[type]||[];
   try{
     const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'pt',format:'a4'}); const W=595,H=842; let y=0;
@@ -2714,7 +2718,7 @@ async function downloadRecordPdf(type,id){
     try{ doc.addImage(MLOGO,'PNG',40,30,58,58); }catch(e){}
     doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(19); doc.text(titleMap[type]||'Report',112,56);
     doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(180,200,220);
-    doc.text(`${CLIENT?CLIENT.name:''}${siteName?('  ·  '+siteName):''}  ·  ${new Date(rec.submitted_at||rec.created_at||Date.now()).toLocaleDateString('en-GB')}`,112,76);
+    doc.text(`${recClient.name||''}${siteName?('  ·  '+siteName):''}  ·  ${new Date(rec.submitted_at||rec.created_at||Date.now()).toLocaleDateString('en-GB')}`,112,76);
     y=150;
     const line=(k,v)=>{ if(v==null||v==='')return; doc.setFont('helvetica','bold');doc.setTextColor(90,107,128);doc.setFontSize(9);doc.text(String(k).toUpperCase(),40,y);
       doc.setFont('helvetica','normal');doc.setTextColor(15,32,51);doc.setFontSize(11); const ls=doc.splitTextToSize(textOnly(String(v)),W-80); doc.text(ls,40,y+14); y+=14+ls.length*13+8; if(y>H-90){doc.addPage();y=48;} };
@@ -4965,7 +4969,7 @@ async function ntfRemove(id){
 
 /* Pages that still show the client picked in the side menu (release 9) */
 const CLIENT_SCOPED_PAGES=['sites','schedule','rota','teams','callouts','shifts','installs','gallery','project','documents','notify','command','risks','quotes','requests','reports','analytics','overview','completed','checkins'];
-const TITLES={hq:'HQ — Business Overview',digest:'Daily Digest',clients:'Clients',jobs:'Job Status — Mobilisation Control',completed:'Completed Works',crm:'Pipeline',pipeline:'Pipeline',command:'Command Centre',checkins:'Site Check-ins',engineers:'Engineers — Team Register',compliance:'Compliance — Expiries & Right to Work',overview:'Programme Overview',sites:'Progress',schedule:'Schedule',rota:'Shift Rota',teams:'Teams & Routes',installs:'Install Reports',risks:'Risk Register',callouts:'Call-Out Reports',shifts:'Shift Reports',reports:'Activity Feed',gallery:'Photo Evidence',analytics:'Analytics & Insights',documents:'Documents',notify:'Email Updates',project:'Project Plan',requests:'Work Requests',quotes:'Quote Requests',quality:'Quality & Handover',suppliers:'Suppliers — Labour Partners',finance:'Profit & Margins',sup_home:'Dashboard',sup_engineers:'Engineers',sup_jobs:'Bookings',sup_timesheets:'Timesheets',sup_feedback:'Performance & Feedback',sup_docs:'Compliance & Documents'};
+const TITLES={hq:'HQ — Business Overview',digest:'Daily Digest',clients:'Clients',jobs:'Job Status — Mobilisation Control',completed:'Completed Works',crm:'Pipeline',pipeline:'Pipeline',command:'Command Centre',checkins:'Site Check-ins',engineers:'Engineers',personrec:'Engineer',compliance:'Compliance — Expiries & Right to Work',overview:'Programme Overview',sites:'Progress',schedule:'Schedule',rota:'Shift Rota',teams:'Site Team Profiles',installs:'Install Reports',risks:'Risk Register',callouts:'Call-Out Reports',shifts:'Shift Reports',reports:'Activity Feed',gallery:'Photo Evidence',analytics:'Analytics & Insights',documents:'Documents',notify:'Email Updates',project:'Project Plan',requests:'Work Requests',quotes:'Quote Requests',quality:'Quality & Handover',suppliers:'Suppliers — Labour Partners',finance:'Profit & Margins',sup_home:'Dashboard',sup_engineers:'Engineers',sup_jobs:'Bookings',sup_timesheets:'Timesheets',sup_feedback:'Performance & Feedback',sup_docs:'Compliance & Documents'};
 function go(page){
   CURRENT=page;
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
@@ -4977,7 +4981,8 @@ function go(page){
   try{
     if(page==='hq')html=pageHQ();
     else if(page==='digest')html=pageDigest();
-    else if(page==='engineers')html=pageEngineers();
+    else if(page==='engineers')html=pagePeople();
+    else if(page==='personrec')html=pagePersonRec();
     else if(page==='compliance')html=pageCompliance();
     else if(page==='suppliers')html=pageSuppliers();
     else if(page==='finance')html=pageFinance();
@@ -5003,7 +5008,7 @@ function go(page){
     else if(page==='sites')html=pageSites();
     else if(page==='schedule')html=pageSchedule();
     else if(page==='rota')html=pageRota();
-    else if(page==='teams')html=pageTeams();
+    else if(page==='teams')html=(PROFILE.role==='engineer'?pageTeams():pageTeamProfiles());
     else if(page==='installs')html=pageInstalls();
     else if(page==='risks')html=pageRisks();
     else if(page==='callouts')html=pageCallouts();
@@ -6280,8 +6285,8 @@ async function savePO(issue){
     if(!confirm('Issue this PO? It will be locked and its PDF saved, ready to send to the supplier.')) return;
   }
   ['peSave','peIssue'].forEach(b=>{ const x=el(b); if(x) x.disabled=true; }); msg('Saving…');
+  let saved=null;
   try{
-    let saved;
     if(isNew){ const r=await sb.from('purchase_orders').insert(head).select().single(); if(r.error) throw r.error; saved=r.data; }
     else { const r=await sb.from('purchase_orders').update(head).eq('id',p.id).select(); if(r.error) throw r.error; if(!r.data||!r.data.length) throw new Error('Not saved — you may not have permission.'); saved=r.data[0]; }
     const keep=PEDIT.lines.filter(l=>l.id).map(l=>l.id), gone=(PEDIT.origLineIds||[]).filter(id=>!keep.includes(id));
@@ -6292,7 +6297,15 @@ async function savePO(issue){
       if(r2.error) throw r2.error; if(!r2.data||!r2.data.length) throw new Error('A line was not saved.');
     }
     if(issue){
-      const r3=await sb.from('purchase_orders').update({status:'open'}).eq('id',saved.id).select(); if(r3.error) throw r3.error;
+      let r3=await sb.from('purchase_orders').update({status:'open'}).eq('id',saved.id).select();
+      if(r3.error && /Supplier insurance/.test(r3.error.message)){
+        const m=r3.error.message.replace(/\. A Director can override this with a reason/,'');
+        if(!jobCan('compliance.override')) throw new Error(m+'. Saved as a draft: ask a Director to override, or update the supplier’s insurance first.');
+        const why=prompt(m+'.\n\nIssue anyway as a Director? Give the reason (it is kept on the PO):');
+        if(!why||!why.trim()) throw new Error(m+'. Saved as a draft, not issued.');
+        r3=await sb.from('purchase_orders').update({status:'open', compliance_override_reason:why.trim()}).eq('id',saved.id).select();
+      }
+      if(r3.error) throw r3.error;
       if(!r3.data||!r3.data.length) throw new Error('Not issued — you may not have permission.'); saved=r3.data[0];
       msg('Issued. Saving the PDF…');
       const path=await poMakeAndStorePdf(saved);
@@ -6305,7 +6318,10 @@ async function savePO(issue){
     const k=(POS||[]).findIndex(x=>x.id===saved.id); if(k>=0) POS[k]=saved; else if(POS) POS.unshift(saved);
     msg(issue?`✓ ${saved.po_ref} issued.`:`✓ Saved ${saved.po_ref}.`,'ok');
     setTimeout(()=>{ openPO(saved.id); if(CURRENT==='poreg'){ const t=el('poTable'); if(t) t.innerHTML=poTableHtml(); } if(CURRENT==='jobreg'&&typeof jobRefreshCosts==='function') jobRefreshCosts(saved.job_id); },500);
-  }catch(e){ msg('Not saved: '+poFriendlyError(e),'err'); ['peSave','peIssue'].forEach(b=>{ const x=el(b); if(x) x.disabled=false; }); }
+  }catch(e){ const m=poFriendlyError(e);
+    if(/^Supplier insurance/.test(m) && saved){ const k=(POS||[]).findIndex(x=>x.id===saved.id); if(k>=0) POS[k]=saved; else if(POS) POS.unshift(saved);
+      await openPO(saved.id); msg(m,'err'); return; }
+    msg('Not saved: '+m,'err'); ['peSave','peIssue'].forEach(b=>{ const x=el(b); if(x) x.disabled=false; }); }
 }
 
 function poNewSupplier(){
@@ -7680,6 +7696,8 @@ function qreqListHtml(){
       acts.push(`<button class="btn" style="padding:5px 10px;width:auto" onclick="qreqCreate('${r.id}',false)">Create quote</button>`);
     }
     if(canQ && !q && ['New','Reviewing'].includes(st)) acts.push(`<button class="btn-ghost" style="padding:5px 10px;color:var(--red)" onclick="qreqDecline('${r.id}')">Decline</button>`);
+    acts.push(`<button class="btn-ghost" style="padding:5px 10px" onclick="qreqPdf('${r.id}')">⬇ PDF</button>`);
+    const stSel=canQ?`<label class="muted" style="font-size:11.5px;display:flex;gap:6px;align-items:center;width:100%;justify-content:flex-end;margin-top:4px">Status <select class="qreq-st" style="width:auto;padding:5px 8px;font-size:12px" onchange="qreqSetStatus('${r.id}',this.value,this)">${REQ_MANUAL.map(s=>`<option ${s===(st==='Accepted'?'Won':st)?'selected':''}>${s}</option>`).join('')}</select></label>`:'';
     return `<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
       <div style="flex:1;min-width:260px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:14.5px">${esc(r.title||'Request')}</b>${qreqStatusChip(st)}${r.quote_ref?`<span class="chip grey">${esc(r.quote_ref)}</span>`:''}${r.priority&&r.priority!=='Normal'?`<span class="chip ${['Urgent','High'].includes(r.priority)?'amber':'grey'}">${esc(r.priority)}</span>`:''}</div>
@@ -7689,7 +7707,7 @@ function qreqListHtml(){
         ${st==='Declined'&&r.decline_reason?`<div style="font-size:12.5px;margin-top:6px;color:var(--red)">Declined: ${esc(r.decline_reason)}</div>`:''}
         ${(r.media_links||[]).length?`<div class="muted" style="font-size:11px;margin-top:8px">📷 ${r.media_links.length} attachment(s) from the client</div>${reqPhotoStrip(r.media_links)}`:''}
       </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${acts.join('')}</div></div></div>`;
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:330px">${acts.join('')}${stSel}</div></div></div>`;
   }).join('');
 }
 async function qreqOpenQuote(id){ if(QUOTES===null) await loadQuotes(); openQuote(id); }
@@ -7710,6 +7728,27 @@ async function qreqDecline(id){
   if(u.error||!u.data||!u.data.length){ alert('Not saved: '+(u.error?u.error.message:'no permission')); return; }
   try{ await notifyClient(r.client_id,'quote','Request declined: '+(r.title||'your request'),'quotes','We’re not able to take this one on: '+reason.trim()); }catch(e){}
   qreqReload();
+}
+
+/* ---------- release 14: PDF and manual status ---------- */
+const REQ_MANUAL=['New','Reviewing','Quoted','Won','Lost','Declined'];
+function qreqPdf(id){
+  const r=(QREQ||[]).find(x=>x.id===id); if(!r) return;
+  downloadRecordPdf('quote', id, r);
+}
+async function qreqSetStatus(id, status, sel){
+  const r=(QREQ||[]).find(x=>x.id===id); if(!r) return;
+  const cur=r.status==='Accepted'?'Won':(r.status||'New');
+  if(status===cur) return;
+  if(status==='Declined'){ if(sel) sel.value=cur; return qreqDecline(id); }
+  const q=qreqQuoteFor(r);
+  if(!confirm(`Change “${r.title}” from ${cur} to ${status}?${q?`\n\nIt is linked to ${qRefText(q)}; the status will still follow that quote automatically when the quote changes.`:''}\n\nThe client sees this status in their portal.`)){ if(sel) sel.value=cur; return; }
+  const patch={status};
+  if(r.status==='Declined'){ patch.decline_reason=null; patch.declined_at=null; patch.declined_by=null; }
+  const u=await sb.from('work_requests').update(patch).eq('id',id).select();
+  if(u.error||!u.data||!u.data.length){ alert('Not saved: '+(u.error?u.error.message:'no permission')); if(sel) sel.value=cur; return; }
+  Object.assign(r, u.data[0]);
+  const b=el('qreqList'); if(b) b.innerHTML=qreqListHtml();
 }
 /* ===================================================================
    JOB TABS  —  release 11: Team, Mobilisation, Reports, Attachments.
@@ -7745,13 +7784,13 @@ async function jobLoadTeam(j){
   const tr=(x,removed)=>{ const w=(TEAMW||[]).find(y=>y.id===x.worker_id)||{}; const c=removed?[]:clash(x);
     return `<tr style="${removed?'opacity:.55':''}"><td><b>${esc(w.full_name||'—')}</b><div class="muted" style="font-size:11.5px">${esc(TEAM_WTYPES[w.worker_type]||'')}</div></td><td>${esc(x.role)}</td>
       <td style="white-space:nowrap">${x.start_date?jobDate(x.start_date):'—'} – ${x.end_date?jobDate(x.end_date):'—'}</td>
-      <td style="font-size:12.5px">${esc(x.notes||'')}${c.length?`<div style="color:var(--amber)">⚠ Also on ${c.map(o=>{ const oj=jobById(o.job_id); return esc(oj?oj.job_ref:'another job')+(o.start_date?' ('+jobDate(o.start_date)+(o.end_date?' – '+jobDate(o.end_date):'')+')':''); }).join(', ')}</div>`:''}${removed?`<div class="muted">Removed: ${esc(x.remove_reason||'')}</div>`:''}</td>
+      <td style="font-size:12.5px">${esc(x.notes||'')}${c.length?`<div style="color:var(--amber)">⚠ Also on ${c.map(o=>{ const oj=jobById(o.job_id); return esc(oj?oj.job_ref:'another job')+(o.start_date?' ('+jobDate(o.start_date)+(o.end_date?' – '+jobDate(o.end_date):'')+')':''); }).join(', ')}</div>`:''}${removed?`<div class="muted">Removed: ${esc(x.remove_reason||'')}</div>`:''}${x.compliance_override_reason?`<div style="color:var(--amber)">⚠ Compliance override: ${esc(x.compliance_override_reason)}</div>`:''}</td>
       <td style="text-align:right;white-space:nowrap">${can&&!removed?`<button class="btn-ghost" style="padding:4px 9px" onclick="jobTeamForm('${j.id}','${x.id}')">Edit</button> <button class="btn-ghost" style="padding:4px 9px;color:var(--red)" onclick="jobTeamRemove('${j.id}','${x.id}')">Remove</button>`:''}</td></tr>`; };
   box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap"><div style="font-weight:700;flex:1">Team <span class="muted" style="font-weight:500;font-size:12.5px">· ${live.length} allocated</span></div>
       ${can?`<button class="btn-ghost" onclick="jobTeamCopyForm('${j.id}')">Copy team from another job</button><button class="btn-ghost" onclick="jobTeamForm('${j.id}')">＋ Add person</button>`:''}</div>
     <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Person</th><th>Role</th><th>Dates</th><th>Notes</th><th></th></tr></thead>
       <tbody>${live.map(x=>tr(x,false)).join('')||'<tr><td colspan="5" class="muted" style="padding:12px">Nobody allocated yet. Add the people who will work on this job, with their dates.</td></tr>'}${gone.map(x=>tr(x,true)).join('')}</tbody></table>
-      <div class="muted" style="font-size:11.5px;padding:6px 4px">Everyone is picked from the people register (employed, self-employed and agency). A warning shows when someone is already on another job for overlapping dates. Compliance checks (expired cards or right to work) are added in a later release.</div></div>`;
+      <div class="muted" style="font-size:11.5px;padding:6px 4px">Everyone is picked from the people register (employed, self-employed and agency). A warning shows when someone is already on another job for overlapping dates. Someone with an expired card or right to work can’t be added unless a Director overrides it with a reason.</div></div>`;
 }
 async function jobTeamForm(jobId, rowId){
   const j=jobById(jobId); await jobWorkers();
@@ -7760,13 +7799,15 @@ async function jobTeamForm(jobId, rowId){
   const ws=(TEAMW||[]).filter(w=>w.active || w.id===x.worker_id);
   const groups=['employed','self_employed','agency','unclassified'].map(t=>{ const g=ws.filter(w=>w.worker_type===t); return g.length?`<optgroup label="${esc(TEAM_WTYPES[t])}">${g.map(w=>`<option value="${w.id}" ${w.id===x.worker_id?'selected':''}>${esc(w.full_name)}</option>`).join('')}</optgroup>`:''; }).join('');
   billModal('jtModal', `${rowId?'Edit':'Add'} team member · ${esc(j.job_ref)}`,
-    `<div class="fld"><label>Person <span class="req">*</span></label><select id="jt_worker" ${rowId?'disabled':''}><option value="">— choose —</option>${groups}</select></div>
+    `<div class="fld"><label>Person <span class="req">*</span></label><select id="jt_worker" ${rowId?'disabled':''} onchange="pplCheckWorker(this.value, el('jt_start').value)"><option value="">— choose —</option>${groups}</select></div>
+     <div id="jt_comp" style="margin-bottom:8px"></div>
      <div class="frow"><div class="fld"><label>Role</label><select id="jt_role">${TEAM_ROLES.map(r=>`<option ${r===x.role?'selected':''}>${r}</option>`).join('')}${TEAM_ROLES.includes(x.role)?'':`<option selected>${esc(x.role)}</option>`}</select></div>
-       <div class="fld"><label>From</label><input id="jt_start" type="date" value="${esc(String(x.start_date||'').slice(0,10))}"></div>
+       <div class="fld"><label>From</label><input id="jt_start" type="date" value="${esc(String(x.start_date||'').slice(0,10))}" onchange="pplCheckWorker(el('jt_worker').value, this.value)"></div>
        <div class="fld"><label>To</label><input id="jt_end" type="date" value="${esc(String(x.end_date||'').slice(0,10))}"></div></div>
      <div class="fld"><label>Notes</label><input id="jt_notes" value="${esc(x.notes||'')}" placeholder="e.g. nights only, driving the van"></div>
      <div class="muted" style="font-size:12px">Not in the list? Add them under Engineers (or as an agency engineer under Suppliers).</div>`,
     `<button class="btn-ghost" onclick="el('jtModal').remove()">Cancel</button><button class="btn" id="jtSave" onclick="jobTeamSave('${jobId}',${rowId?`'${rowId}'`:'null'})">${rowId?'Save':'Add to team'}</button>`);
+  if(x.worker_id) pplCheckWorker(x.worker_id, x.start_date);
 }
 async function jobTeamSave(jobId,rowId){
   const v=k=>el(k).value.trim(); const worker=rowId?null:v('jt_worker');
@@ -7779,7 +7820,14 @@ async function jobTeamSave(jobId,rowId){
   const c=(o.data||[]).filter(x=>overlaps(row.start_date,row.end_date,x.start_date,x.end_date));
   if(c.length && !confirm(`${teamWorkerName(wid)} is already on ${c.map(x=>{ const oj=jobById(x.job_id); return (oj?oj.job_ref:'another job')+(x.start_date?' ('+jobDate(x.start_date)+(x.end_date?' – '+jobDate(x.end_date):'')+')':''); }).join(', ')}.\n\nAdd them to this job anyway?`)) return;
   el('jtSave').disabled=true;
-  const r=rowId?await sb.from('job_team').update(row).eq('id',rowId).select():await sb.from('job_team').insert({...row, job_id:jobId, worker_id:worker}).select();
+  const write=()=>rowId?sb.from('job_team').update(row).eq('id',rowId).select():sb.from('job_team').insert({...row, job_id:jobId, worker_id:worker}).select();
+  let r=await write();
+  if(r.error && /Compliance block/.test(r.error.message)){
+    if(!jobCan('compliance.override')){ el('jtSave').disabled=false; return billSay('jtModal',r.error.message.replace(/\.? A Director can override this with a reason/,'')+'. Ask a Director to override it, or update the card first.'); }
+    const why=prompt(r.error.message.replace(/\. A Director can override this with a reason/,'')+'.\n\nOverride as a Director? Give the reason (it is kept on the job):');
+    if(!why||!why.trim()){ el('jtSave').disabled=false; return billSay('jtModal','Not added: compliance block not overridden.'); }
+    row.compliance_override_reason=why.trim(); r=await write();
+  }
   if(r.error||!r.data||!r.data.length){ el('jtSave').disabled=false; return billSay('jtModal','Not saved: '+(r.error?r.error.message:'no permission')); }
   el('jtModal').remove(); jobLoadTeam(jobById(jobId));
 }
@@ -7805,9 +7853,14 @@ async function jobTeamCopy(jobId){
   const have=new Set((mine.data||[]).map(x=>x.worker_id));
   const add=(src.data||[]).filter(x=>!have.has(x.worker_id));
   if(!add.length) return billSay('jtCopy','Nobody to copy — everyone is already on this job, or that job has no team.');
-  const r=await sb.from('job_team').insert(add.map(x=>({job_id:jobId, worker_id:x.worker_id, role:x.role, start_date:j.start_date||null, end_date:j.end_date||null}))).select();
-  if(r.error) return billSay('jtCopy','Not copied: '+r.error.message);
-  el('jtCopy').remove(); jobLoadTeam(j);
+  const blocked=[], failed=[];
+  for(const x of add){
+    const r=await sb.from('job_team').insert({job_id:jobId, worker_id:x.worker_id, role:x.role, start_date:j.start_date||null, end_date:j.end_date||null}).select();
+    if(r.error){ (/Compliance block/.test(r.error.message)?blocked:failed).push(teamWorkerName(x.worker_id)); }
+  }
+  jobLoadTeam(j);
+  if(blocked.length||failed.length) return billSay('jtCopy',[blocked.length?'Not added because of an expired card (add them one by one for a Director override): '+blocked.join(', '):'', failed.length?'Not added: '+failed.join(', '):''].filter(Boolean).join(' · '));
+  el('jtCopy').remove();
 }
 
 /* ---------- Mobilisation ---------- */
@@ -8544,6 +8597,456 @@ async function qAddSite(){
   el('qe_site').innerHTML=jobSiteOptions(client, r.data.id, true);
   el('qeNewSite').style.display='none'; ['name','code','addr','city','country'].forEach(k=>{ const e=el('qs_'+k); if(e) e.value=''; });
   qRefreshContacts(); msg('✓ Site added and chosen.','ok');
+}
+/* ===================================================================
+   PEOPLE & COMPLIANCE  —  release 14 (build release 6).
+   One Engineers register for everyone who works on jobs (employed,
+   self-employed, agency), each with a record page: Details, Cards &
+   competencies (scan + share-with-client tick), Safety & travel, Rates,
+   Jobs & hours. Site Team Profiles for clients, with a PDF profile pack.
+   =================================================================== */
+
+let PPL=null, PPL_ERR=null, PPL_LOADING=false, PPL_P=null;
+let PPL_F={type:'all', status:'active', comp:'all', q:''};
+let PREC={id:null, tab:'details'};
+const PREC_TABS=[['details','Details'],['cards','Cards & competencies'],['safety','🔒 Safety & travel'],['rates','Rates'],['jobs','Jobs & hours']];
+const PPL_TYPES={employed:['Employed','green'], self_employed:['Self-employed','cyan'], agency:['Agency','violet'], unclassified:['To classify','amber']};
+
+function pplTypeChip(t){ const x=PPL_TYPES[t]||[t,'grey']; return `<span class="chip ${x[1]}">${esc(x[0])}</span>`; }
+function pplCardState(c){
+  if(!c.expiry) return {c:'grey', label:'no expiry'};
+  const d=Math.ceil((new Date(c.expiry)-new Date(ymd(new Date())))/86400000);
+  if(d<0) return {c:'red', label:'expired'};
+  if(d<=30) return {c:'amber', label:'expires in '+d+'d'};
+  return {c:'green', label:'valid'};
+}
+function pplLoad(){ if(PPL_LOADING) return PPL_P; PPL_P=pplLoadNow(); return PPL_P; }
+async function pplLoadNow(){
+  PPL_LOADING=true; PPL_ERR=null;
+  try{
+    await clPerms();
+    const [w, e, se, sup, cards, team] = await Promise.all([
+      jobFetchAll(()=>sb.from('workers').select('*').order('full_name')),
+      jobFetchAll(()=>sb.from('engineers').select('id,full_name,trade,phone,email,status,notes,engineer_type')),
+      jobFetchAll(()=>sb.from('supplier_engineers').select('id,supplier_id,full_name,trade,phone,email,status,rtw_status,a1_status,a1_expiry,medical_provider,medical_expiry,passport_expiry,notes')),
+      jobFetchAll(()=>sb.from('suppliers').select('id,name').order('name')),
+      jobFetchAll(()=>sb.from('person_cards').select('*').is('archived_at',null).order('card_type')),
+      jobCan('jobs.view') ? jobFetchAll(()=>sb.from('job_team').select('*').is('removed_at',null)) : Promise.resolve([])]);
+    if(jobCan('jobs.view') && JOBREG===null) await loadJobRegister();
+    if(!ENGHR || !ENGHR.length) await loadEngHr();
+    PPL={workers:w, eng:Object.fromEntries(e.map(x=>[x.id,x])), seng:Object.fromEntries(se.map(x=>[x.id,x])), sup:sup, cards, team};
+    TEAMW=null;
+  }catch(err){ PPL_ERR=err.message||String(err); PPL=null; }
+  PPL_LOADING=false;
+  if(['engineers','personrec','compliance'].includes(CURRENT)) go(CURRENT);
+}
+function pplReload(){ PPL=null; pplLoad(); }
+function pplSrc(w){ return w.engineer_id?PPL.eng[w.engineer_id]:(w.supplier_engineer_id?PPL.seng[w.supplier_engineer_id]:null); }
+function pplActive(w){ const s=pplSrc(w); return w.active && !(s && ['Left','Inactive'].includes(s.status)); }
+function pplSupplierName(id){ const s=(PPL&&PPL.sup||[]).find(x=>x.id===id); return s?s.name:''; }
+function pplCards(wid){ return PPL.cards.filter(c=>c.worker_id===wid); }
+function pplRag(w){
+  const cards=pplCards(w.id); const s=pplSrc(w);
+  if(cards.some(c=>pplCardState(c).c==='red') || (s&&s.rtw_status==='Expired')) return 'red';
+  if(cards.some(c=>pplCardState(c).c==='amber') || (s&&s.rtw_status==='Not checked')) return 'amber';
+  return cards.length?'green':'grey';
+}
+function pplNow(wid){
+  const today=ymd(new Date());
+  const t=PPL.team.filter(x=>x.worker_id===wid && (!x.end_date || x.end_date>=today)).sort((a,b)=>String(a.start_date||'').localeCompare(String(b.start_date||'')))[0];
+  if(!t) return '';
+  const j=jobById(t.job_id); const on=!t.start_date || t.start_date<=today;
+  return `<span class="chip ${on?'green':'cyan'}" style="font-size:10.5px">${on?'On':'Next'}: ${esc(j?j.job_ref:'job')}</span>${on?'':`<div class="muted" style="font-size:11px">from ${jobDate(t.start_date)}</div>`}`;
+}
+
+/* ---------------- register ---------------- */
+function pplFiltered(){
+  const f=PPL_F, q=f.q.trim().toLowerCase();
+  return PPL.workers.filter(w=>{
+    const act=pplActive(w);
+    if(f.status==='active' && !act) return false;
+    if(f.status==='left' && act) return false;
+    if(f.type!=='all' && w.worker_type!==f.type) return false;
+    if(f.comp!=='all' && pplRag(w)!==f.comp) return false;
+    const s=pplSrc(w)||{};
+    if(q && ![w.full_name, s.trade, pplSupplierName(w.supplier_id), ...pplCards(w.id).map(c=>c.card_type)].some(v=>String(v||'').toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+function pplSet(k,v){ PPL_F[k]=v; const t=el('pplTable'); if(t) t.innerHTML=pplTableHtml(); }
+function pplAvatar(w, size){ size=size||30; const ini=String(w.full_name||'·').split(/\s+/).map(x=>x[0]).join('').slice(0,2).toUpperCase();
+  return `<span class="ppl-av" data-photo="${esc(w.photo_path||'')}" style="display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:50%;background:var(--panel2);border:1px solid var(--line2);font-size:${Math.round(size/2.8)}px;font-weight:800;overflow:hidden;flex:none;background-size:cover;background-position:center">${w.photo_path?'':esc(ini)}</span>`; }
+async function pplFillPhotos(root){
+  const els=[...(root||document).querySelectorAll('.ppl-av[data-photo]')].filter(x=>x.dataset.photo && !x.dataset.done);
+  for(const x of els){ x.dataset.done='1'; try{ const r=await sb.storage.from('people').createSignedUrl(x.dataset.photo,600); if(r.data&&r.data.signedUrl){ x.style.backgroundImage=`url("${r.data.signedUrl}")`; x.textContent=''; } }catch(e){} }
+}
+function pplTableHtml(){
+  const rows=pplFiltered();
+  if(!rows.length) return `<div class="empty" style="padding:24px"><div class="big">👷</div><b>No people match</b></div>`;
+  const rag={red:'<span class="rag rag-red"></span> Expired',amber:'<span class="rag rag-amber"></span> Expiring',green:'<span class="rag rag-green"></span> OK',grey:'<span class="muted">No cards</span>'};
+  setTimeout(()=>pplFillPhotos(el('pplTable')),30);
+  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Name</th><th>Type</th><th>Trade</th><th>Compliance</th><th>Cards &amp; competencies</th><th>Job</th><th></th></tr></thead><tbody>${
+    rows.map(w=>{ const s=pplSrc(w)||{}, cards=pplCards(w.id), r=pplRag(w);
+      return `<tr${pplActive(w)?'':' style="opacity:.55"'}><td><div style="display:flex;gap:9px;align-items:center">${pplAvatar(w)}<div><b>${esc(w.full_name)}</b>${w.supplier_id&&w.worker_type!=='employed'?`<div class="muted" style="font-size:11.5px">${esc(pplSupplierName(w.supplier_id))}</div>`:''}</div></div></td>
+        <td>${pplTypeChip(w.worker_type)}</td><td>${esc(s.trade||'—')}</td><td style="white-space:nowrap">${rag[r]}</td>
+        <td style="max-width:320px">${cards.map(c=>{ const st=pplCardState(c); return `<span class="chip ${st.c}" style="font-size:10px;margin:1px 2px 1px 0">${esc(c.card_type)}${st.c==='red'?' · expired':''}</span>`; }).join('')||'<span class="muted" style="font-size:11.5px">—</span>'}</td>
+        <td>${jobCan('jobs.view')?pplNow(w.id):''}</td>
+        <td style="text-align:right"><button class="btn-ghost" style="padding:4px 10px" onclick="openPersonRecord('${w.id}')">Open</button></td></tr>`; }).join('')}</tbody></table></div>`;
+}
+function pagePeople(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','');
+  if(PPL===null){ if(PPL_ERR) return emptyState('⚠','Could not load the register', esc(PPL_ERR)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="PPL_ERR=null;pplReload()">Try again</button></div>`); pplLoad(); return emptyState('⏳','Loading the register…','One moment.'); }
+  const act=PPL.workers.filter(pplActive), today=ymd(new Date());
+  const opt=(v,l,cur)=>`<option value="${v}" ${v===cur?'selected':''}>${l}</option>`;
+  const onJob=new Set(PPL.team.filter(t=>(!t.start_date||t.start_date<=today)&&(!t.end_date||t.end_date>=today)).map(t=>t.worker_id));
+  return `<div class="sechead"><h3>👷 Engineers</h3><span class="sub">Everyone who works on jobs: employed, self-employed and agency</span><span class="line"></span>
+      <button class="addbtn" onclick="pplAddForm()">＋ Add person</button><button class="btn-ghost" onclick="pplReload()">Refresh</button></div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${kpi('','👷','Active people',act.length,'')}
+      ${kpi(act.some(w=>pplRag(w)==='red')?'r':'g','⛔','Expired card or RTW',act.filter(w=>pplRag(w)==='red').length,'')}
+      ${kpi(act.some(w=>pplRag(w)==='amber')?'a':'g','⏳','Expiring within 30 days',act.filter(w=>pplRag(w)==='amber').length,'')}
+      ${kpi('','🛠','On a job today',act.filter(w=>onJob.has(w.id)).length,'')}</div>
+    <div class="card fld" style="padding:12px 14px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+      <input placeholder="Search name, trade, agency, card…" value="${esc(PPL_F.q)}" oninput="pplSet('q',this.value)" style="flex:1;min-width:200px;width:auto">
+      <select style="width:auto" onchange="pplSet('type',this.value)">${opt('all','All types',PPL_F.type)}${Object.entries(PPL_TYPES).map(([k,v])=>opt(k,v[0],PPL_F.type)).join('')}</select>
+      <select style="width:auto" onchange="pplSet('comp',this.value)">${opt('all','Any compliance',PPL_F.comp)}${opt('red','Expired',PPL_F.comp)}${opt('amber','Expiring',PPL_F.comp)}${opt('green','OK',PPL_F.comp)}${opt('grey','No cards',PPL_F.comp)}</select>
+      <select style="width:auto" onchange="pplSet('status',this.value)">${opt('active','Active',PPL_F.status)}${opt('left','Left',PPL_F.status)}${opt('all','Everyone',PPL_F.status)}</select></div>
+    <div class="card" id="pplTable">${pplTableHtml()}</div>
+    <div class="note" style="margin-top:10px">Cards and competencies now live on each person’s record (not on team rosters). Cost rates are on each person’s Rates tab.</div>`;
+}
+function pplAddForm(){
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:560px"><div class="modal-h"><h3>Add person</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div class="fld"><label>Full name <span class="req">*</span></label><input id="pa_name"></div>
+      <div class="frow"><div class="fld"><label>Type</label><select id="pa_type" onchange="el('pa_supw').style.display=this.value==='agency'?'':'none'">${Object.entries(PPL_TYPES).filter(([k])=>k!=='unclassified').map(([k,v])=>`<option value="${k}">${v[0]}</option>`).join('')}</select></div>
+        <div class="fld"><label>Trade</label><input id="pa_trade" placeholder="e.g. Electrician"></div></div>
+      <div class="fld" id="pa_supw" style="display:none"><label>Agency <span class="req">*</span></label><select id="pa_sup"><option value="">— choose —</option>${PPL.sup.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
+      <div class="frow"><div class="fld"><label>Phone</label><input id="pa_phone"></div><div class="fld"><label>Email</label><input id="pa_email" type="email"></div></div>
+      ${jobCan('cost_rates.edit')?'':'<div class="note">Only Directors and Commercial can set the type for costing; until then the person shows as “To classify”.</div>'}
+    </div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="paSave" onclick="pplAddSave()">Add person</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function pplAddSave(){
+  const v=k=>el(k).value.trim(); const name=v('pa_name'), type=v('pa_type');
+  if(!name) return msg('Enter the name.','err');
+  if(type==='agency' && !v('pa_sup')) return msg('Choose the agency.','err');
+  el('paSave').disabled=true;
+  const base={full_name:name, trade:v('pa_trade')||null, phone:v('pa_phone')||null, email:v('pa_email')||null, status:'Active'};
+  const r=type==='agency'?await sb.from('supplier_engineers').insert({...base, supplier_id:v('pa_sup')}).select().single()
+                         :await sb.from('engineers').insert({...base, engineer_type:'internal', is_active:true}).select().single();
+  if(r.error){ el('paSave').disabled=false; return msg('Not saved: '+r.error.message,'err'); }
+  const w=await sb.from('workers').select('*').eq(type==='agency'?'supplier_engineer_id':'engineer_id', r.data.id).maybeSingle();
+  if(w.data && type!=='agency' && jobCan('cost_rates.edit')) await sb.from('workers').update({worker_type:type}).eq('id',w.data.id);
+  closeForm(); PPL=null; await pplLoad();
+  if(w.data) openPersonRecord(w.data.id); else go('engineers');
+}
+
+/* ---------------- record page ---------------- */
+async function openPersonRecord(id, tab){ PREC={id, tab:tab||'details'}; if(PPL===null) await pplLoad(); go('personrec'); }
+function pplRec(){ return PPL&&PPL.workers.find(w=>w.id===PREC.id); }
+function pplTab(t){ PREC.tab=t; document.querySelectorAll('#precTabs .jtab').forEach(b=>b.classList.toggle('on',b.dataset.t===t)); const p=el('precPane'); if(p){ p.innerHTML=pplPaneHtml(); pplAfter(); } }
+function pplAfter(){ pplFillPhotos(el('content')); if(PREC.tab==='jobs') pplLoadHours(); }
+function pagePersonRec(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','');
+  if(PPL===null){ pplLoad(); return emptyState('⏳','Loading…','One moment.'); }
+  const w=pplRec(); if(!w) return emptyState('👷','Person not found',`<button class="btn-ghost" onclick="go('engineers')">Back to Engineers</button>`);
+  const s=pplSrc(w)||{}, r=pplRag(w);
+  setTimeout(pplAfter,30);
+  return `<div class="sechead"><button class="btn-ghost" style="padding:4px 10px" onclick="go('engineers')">← Engineers</button>
+      <div style="display:flex;gap:10px;align-items:center;margin-left:6px">${pplAvatar(w,40)}<div><h3 style="margin:0">${esc(w.full_name)}</h3><div class="muted" style="font-size:12px">${esc(s.trade||'')}${w.supplier_id&&w.worker_type!=='employed'?' · '+esc(pplSupplierName(w.supplier_id)):''}</div></div></div>
+      <span class="sub">${pplTypeChip(w.worker_type)} ${pplActive(w)?'':'<span class="chip grey">Left</span>'} ${r==='red'?'<span class="chip red">Expired card</span>':r==='amber'?'<span class="chip amber">Card expiring</span>':''}</span><span class="line"></span></div>
+    <div class="jtabs" id="precTabs" style="margin-bottom:12px">${PREC_TABS.filter(t=>t[0]!=='rates'||jobCan('cost_rates.view')).map(([k,l])=>`<button class="jtab ${PREC.tab===k?'on':''}" data-t="${k}" onclick="pplTab('${k}')">${l}${k==='cards'?` <span class="muted" style="font-weight:500">${pplCards(w.id).length||''}</span>`:''}</button>`).join('')}</div>
+    <div id="precPane">${pplPaneHtml()}</div>`;
+}
+function pplPaneHtml(){
+  try{
+    switch(PREC.tab){
+      case 'details': return pplDetailsHtml();
+      case 'cards': return pplCardsHtml();
+      case 'safety': return pplSafetyHtml();
+      case 'rates': return pplRatesHtml();
+      case 'jobs': return pplJobsHtml();
+    }
+  }catch(e){ return `<div class="card">Could not draw this tab: ${esc(e.message)}</div>`; }
+  return '';
+}
+/* Details */
+function pplDetailsHtml(){
+  const w=pplRec(), s=pplSrc(w), ce=jobCan('cost_rates.edit');
+  return `<div class="row2"><div class="card"><h4 style="margin:0 0 10px">Details</h4>
+      <div class="fld"><label>Full name</label><input id="pd_name" value="${esc(w.full_name||'')}" ${s||ce?'':'disabled'}></div>
+      <div class="frow"><div class="fld"><label>Trade</label><input id="pd_trade" value="${esc((s&&s.trade)||'')}" ${s?'':'disabled'}></div>
+        <div class="fld"><label>Status</label><select id="pd_status" ${s?'':'disabled'}>${['Active','Left'].map(o=>`<option ${(s&&s.status==='Left'?'Left':'Active')===o?'selected':''}>${o}</option>`).join('')}</select></div></div>
+      <div class="frow"><div class="fld"><label>Phone</label><input id="pd_phone" value="${esc((s&&s.phone)||'')}" ${s?'':'disabled'}></div>
+        <div class="fld"><label>Email</label><input id="pd_email" value="${esc((s&&s.email)||'')}" ${s?'':'disabled'}></div></div>
+      <div class="fld"><label>Notes</label><textarea id="pd_notes" rows="2" ${s?'':'disabled'}>${esc((s&&s.notes)||'')}</textarea></div>
+      <div style="display:flex;gap:10px;align-items:center"><button class="btn" id="pdSave" style="width:auto" onclick="pplSaveDetails()">Save details</button><span class="savemsg" id="pdMsg"></span></div>
+    </div>
+    <div class="card"><h4 style="margin:0 0 10px">Photo</h4>
+      <div style="display:flex;gap:14px;align-items:center">${pplAvatar(w,86)}<div><input type="file" id="pd_photo" accept="image/*"><div style="margin-top:8px"><button class="btn-ghost" onclick="pplSavePhoto()">Upload photo</button></div>
+      <div class="muted" style="font-size:12px;margin-top:6px">Shown on Site Team Profiles and the profile pack for clients whose jobs this person works on.</div></div></div>
+      <h4 style="margin:16px 0 10px">Type and costing</h4>
+      <div class="frow"><div class="fld"><label>Type</label><select id="pd_type" ${ce?'':'disabled'}>${Object.entries(PPL_TYPES).map(([k,v])=>`<option value="${k}" ${k===w.worker_type?'selected':''}>${v[0]}</option>`).join('')}</select></div>
+        <div class="fld"><label>Invoiced by (agency / own company)</label><select id="pd_sup" ${ce?'':'disabled'}><option value="">— none —</option>${PPL.sup.map(x=>`<option value="${x.id}" ${x.id===w.supplier_id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div></div>
+      ${ce?`<button class="btn-ghost" onclick="pplSaveType()">Save type</button>`:'<div class="muted" style="font-size:12px">Only Directors and Commercial can change the type and who invoices.</div>'}
+      <span class="savemsg" id="ptMsg"></span>
+    </div></div>`;
+}
+async function pplSaveDetails(){
+  const w=pplRec(), s=pplSrc(w); const v=k=>el(k).value.trim();
+  if(!v('pd_name')) return clSay('pdMsg','Enter the name.','err');
+  el('pdSave').disabled=true;
+  let r;
+  if(s){ const row={full_name:v('pd_name'), trade:v('pd_trade')||null, status:v('pd_status'), phone:v('pd_phone')||null, email:v('pd_email')||null, notes:v('pd_notes')||null};
+    r=await sb.from(w.engineer_id?'engineers':'supplier_engineers').update(row).eq('id',s.id).select(); }
+  else r=await sb.from('workers').update({full_name:v('pd_name')}).eq('id',w.id).select();
+  el('pdSave').disabled=false;
+  if(r.error||!r.data||!r.data.length) return clSay('pdMsg','Not saved: '+(r.error?r.error.message:'no permission'),'err');
+  PPL=null; await pplLoad(); clSay('pdMsg','✓ Saved.','ok');
+}
+async function pplSaveType(){
+  const r=await sb.from('workers').update({worker_type:el('pd_type').value, supplier_id:el('pd_sup').value||null}).eq('id',PREC.id).select();
+  if(r.error||!r.data||!r.data.length) return clSay('ptMsg','Not saved: '+(r.error?r.error.message:'no permission'),'err');
+  PPL=null; await pplLoad(); clSay('ptMsg','✓ Saved.','ok');
+}
+async function pplSavePhoto(){
+  const f=el('pd_photo').files[0]; if(!f) return alert('Choose a photo first.');
+  const path=`${PREC.id}/photo_${Date.now()}.${(f.name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,5)}`;
+  const u=await sb.storage.from('people').upload(path,f,{contentType:f.type,upsert:false});
+  if(u.error) return alert('Not uploaded: '+u.error.message);
+  const r=await sb.rpc('set_worker_photo',{p_worker:PREC.id, p_path:path});
+  if(r.error) return alert('Not saved: '+r.error.message);
+  PPL=null; await pplLoad();
+}
+/* Cards & competencies */
+function pplCardsHtml(){
+  const w=pplRec(), cards=pplCards(w.id);
+  return `<div class="sechead" style="margin:0 0 8px"><h4 style="margin:0">Cards &amp; competencies</h4><span class="sub">An expired card stops this person being added to a job (a Director can override)</span><span class="line"></span><button class="addbtn" onclick="pplCardForm()">＋ Add card</button></div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Card</th><th>Number</th><th>Expiry</th><th>Scan</th><th>Share with client</th><th></th></tr></thead><tbody>
+    ${cards.map(c=>{ const st=pplCardState(c); return `<tr><td><b>${esc(c.card_type)}</b>${c.notes?`<div class="muted" style="font-size:11.5px">${esc(c.notes)}</div>`:''}${c.source!=='manual'?`<div class="muted" style="font-size:11px">${esc({engineer_list:'From the old engineer list',team_roster:'From a team roster',agency_portal:'From the agency’s portal'}[c.source]||'')}</div>`:''}</td>
+      <td>${esc(c.card_number||'—')}</td><td style="white-space:nowrap">${c.expiry?jobDate(c.expiry):'—'} <span class="chip ${st.c}" style="font-size:10.5px">${esc(st.label)}</span></td>
+      <td>${c.scan_path||c.scan_url?`<button class="btn-ghost" style="padding:4px 9px" onclick="pplOpenScan('${c.id}')">View</button>`:'<span class="muted">—</span>'}</td>
+      <td><label style="display:flex;gap:6px;align-items:center;font-size:12.5px"><input type="checkbox" style="width:auto" ${c.share_with_client?'checked':''} ${c.scan_path||c.scan_url?'':'disabled title="Add a scan first"'} onchange="pplShare('${c.id}',this.checked,this)"> ${c.share_with_client?'Shared':'Not shared'}</label></td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn-ghost" style="padding:4px 9px" onclick="pplCardForm('${c.id}')">Edit</button> <button class="btn-ghost" style="padding:4px 9px" onclick="pplCardRemove('${c.id}')">Remove</button></td></tr>`; }).join('')
+      || '<tr><td colspan="6" class="muted" style="padding:12px">No cards yet.</td></tr>'}</tbody></table></div>
+    <div class="note" style="margin-top:8px">Only scans ticked “Share with client” appear on the client’s Site Team Profiles and profile pack. Older scans kept as links can be shared too; new uploads are stored privately.</div>`;
+}
+function pplCardForm(id){
+  const c=id?PPL.cards.find(x=>x.id===id):{};
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:560px"><div class="modal-h"><h3>${id?'Edit card':'Add card'}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div class="frow"><div class="fld"><label>Card / competency <span class="req">*</span></label><input id="pc_type" list="pcTypes" value="${esc(c.card_type||'')}" placeholder="e.g. CSCS"><datalist id="pcTypes">${CARD_TYPES.concat(['Right to work','Driving licence']).map(t=>`<option>${esc(t)}</option>`).join('')}</datalist></div>
+        <div class="fld"><label>Number</label><input id="pc_num" value="${esc(c.card_number||'')}"></div></div>
+      <div class="frow"><div class="fld"><label>Issued</label><input id="pc_iss" type="date" value="${esc(String(c.issued_on||'').slice(0,10))}"></div>
+        <div class="fld"><label>Expiry</label><input id="pc_exp" type="date" value="${esc(String(c.expiry||'').slice(0,10))}"></div></div>
+      <div class="fld"><label>Scan or photo ${c.scan_path||c.scan_url?'<span class="muted">(choose a file to replace it)</span>':''}</label><input id="pc_file" type="file" accept="image/*,application/pdf"></div>
+      <label style="display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0 10px"><input type="checkbox" id="pc_share" style="width:auto" ${c.share_with_client?'checked':''}> Share the scan with clients this person works for</label>
+      <div class="fld"><label>Notes</label><input id="pc_notes" value="${esc(c.notes||'')}"></div>
+    </div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="pcSave" onclick="pplCardSave(${id?`'${id}'`:'null'})">${id?'Save':'Add card'}</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function pplCardSave(id){
+  const v=k=>el(k).value.trim(); const type=v('pc_type'); if(!type) return msg('Enter the card or competency.','err');
+  el('pcSave').disabled=true;
+  const row={card_type:type, card_number:v('pc_num')||null, issued_on:v('pc_iss')||null, expiry:v('pc_exp')||null, notes:v('pc_notes')||null, share_with_client:el('pc_share').checked};
+  const f=el('pc_file').files[0];
+  if(f){ msg('Uploading the scan…');
+    const path=`${PREC.id}/cards/${Date.now()}_${qSafeName(f.name)}`;
+    const u=await sb.storage.from('people').upload(path,f,{contentType:f.type,upsert:false});
+    if(u.error){ el('pcSave').disabled=false; return msg('Scan not uploaded: '+u.error.message,'err'); }
+    row.scan_path=path; row.scan_name=f.name; }
+  const old=id?PPL.cards.find(x=>x.id===id):null;
+  if(row.share_with_client && !row.scan_path && !(old&&(old.scan_path||old.scan_url))) row.share_with_client=false;
+  const r=id?await sb.from('person_cards').update(row).eq('id',id).select():await sb.from('person_cards').insert({...row, worker_id:PREC.id}).select();
+  if(r.error||!r.data||!r.data.length){ el('pcSave').disabled=false; const m=r.error?r.error.message:'no permission'; return msg(/one_per_type/.test(m)?'This person already has that card. Edit it instead.':'Not saved: '+m,'err'); }
+  closeForm(); PPL=null; await pplLoad();
+}
+async function pplShare(id, on, box){
+  const r=await sb.from('person_cards').update({share_with_client:on}).eq('id',id).select();
+  if(r.error||!r.data||!r.data.length){ alert('Not saved: '+(r.error?r.error.message:'no permission')); box.checked=!on; return; }
+  const c=PPL.cards.find(x=>x.id===id); if(c) c.share_with_client=on; pplTab('cards');
+}
+async function pplCardRemove(id){
+  const reason=prompt('Remove this card from the person’s record? Give a reason (e.g. replaced, entered in error):');
+  if(reason===null) return; if(!reason.trim()) return alert('A reason is needed.');
+  const r=await sb.from('person_cards').update({archived_at:new Date().toISOString(), archive_reason:reason.trim()}).eq('id',id).select();
+  if(r.error) return alert('Not removed: '+r.error.message);
+  PPL=null; await pplLoad();
+}
+async function pplOpenScan(id){
+  const c=PPL.cards.find(x=>x.id===id); if(!c) return;
+  if(!c.scan_path){ window.open(c.scan_url,'_blank'); return; }
+  const w=window.open('about:blank','_blank');
+  const r=await sb.storage.from('people').createSignedUrl(c.scan_path,300);
+  if(r.error||!r.data){ if(w) w.close(); return alert('Could not open: '+(r.error?r.error.message:'')); }
+  if(w) w.location.href=r.data.signedUrl; else window.open(r.data.signedUrl,'_blank');
+}
+/* Safety & travel */
+function pplSafetyHtml(){
+  const w=pplRec(), s=pplSrc(w)||{};
+  if(w.supplier_engineer_id){
+    const row=(l,v,exp)=>`<tr><td>${l}</td><td>${esc(v||'—')}</td><td>${exp?jobDate(exp)+' <span class="chip '+cardStatus(exp).c+'" style="font-size:10.5px">'+(cardStatus(exp).label||'valid')+'</span>':'—'}</td></tr>`;
+    return `<div class="card" style="max-width:720px"><h4 style="margin:0 0 6px">🔒 Safety &amp; travel</h4><div class="muted" style="font-size:12.5px;margin-bottom:10px">Kept by the agency in its supplier portal. Private to Mercury staff; never shown to clients.</div>
+      <table class="tbl"><thead><tr><th>Item</th><th>Detail</th><th>Expiry</th></tr></thead><tbody>
+      ${row('Right to work',s.rtw_status)}${row('A1 certificate',s.a1_status,s.a1_expiry)}${row('Medical insurance',s.medical_provider,s.medical_expiry)}${row('Passport','',s.passport_expiry)}</tbody></table></div>`;
+  }
+  const hr=(ENGHR||[]).find(h=>h.engineer_id===w.engineer_id || h.engineer_key===engHrKey(w.full_name));
+  return `<div class="card" style="max-width:720px"><h4 style="margin:0 0 6px">🔒 Safety &amp; travel</h4><div class="muted" style="font-size:12.5px;margin-bottom:10px">Next of kin, A1, medical insurance and passport. Private to Mercury staff; never shown to clients.</div>
+    ${hr?`<table class="tbl"><tbody><tr><td>Next of kin</td><td>${esc([hr.nok_name,hr.nok_relationship,hr.nok_phone].filter(Boolean).join(' · ')||'—')}</td></tr>
+      <tr><td>A1</td><td>${esc(hr.a1_status||'—')}${hr.a1_expiry?' · expires '+jobDate(hr.a1_expiry):''}</td></tr>
+      <tr><td>Medical insurance</td><td>${esc(hr.medical_provider||'—')}${hr.medical_expiry?' · expires '+jobDate(hr.medical_expiry):''}</td></tr>
+      <tr><td>Passport</td><td>${hr.passport_expiry?'expires '+jobDate(hr.passport_expiry):'—'}</td></tr></tbody></table>`:'<div class="muted">Nothing on file yet.</div>'}
+    <div style="margin-top:10px"><button class="btn-ghost" onclick="openEngHr('${jss(w.full_name)}')">${hr?'Edit':'Add'} safety &amp; travel details</button></div></div>`;
+}
+/* Rates */
+function pplRatesHtml(){
+  const w=pplRec();
+  if(!jobCan('cost_rates.view')) return `<div class="card muted">Your staff role can’t see cost rates.</div>`;
+  if(WORKERS===null){ loadWorkers().then(()=>{ if(CURRENT==='personrec'&&PREC.tab==='rates') pplTab('rates'); }); return `<div class="card muted">Loading rates…</div>`; }
+  const rs=WRATES.filter(r=>r.worker_id===w.id).sort((a,b)=>a.effective_from<b.effective_from?1:-1);
+  return `<div class="card" style="max-width:760px"><h4 style="margin:0 0 6px">Cost rates</h4>
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px">${w.worker_type==='employed'?'Loaded rate (pay plus employer’s costs), dated. Confirmed hours × this rate = the job’s labour cost.':'Agency and self-employed people are costed from their invoices against a PO; a rate here is for reference only.'}</div>
+    <table class="tbl"><thead><tr><th>From</th><th>To</th><th>Rate</th><th>Overtime</th><th>Note</th></tr></thead><tbody>${rs.map(r=>`<tr><td>${jobDate(r.effective_from)}</td><td>${r.effective_to?jobDate(r.effective_to):'<b>current</b>'}</td><td>${rateText(r)}</td><td>×${Number(r.overtime_multiplier)}</td><td>${esc(r.note||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">No rate yet.</td></tr>'}</tbody></table>
+    ${jobCan('cost_rates.edit')?`<div style="margin-top:10px"><button class="btn-ghost" onclick="workerRates('${w.id}')">＋ New rate</button> <button class="btn-ghost" onclick="pplTab('rates')">Refresh</button></div>`:''}</div>`;
+}
+/* Jobs & hours */
+function pplJobsHtml(){
+  if(!jobCan('jobs.view')) return `<div class="card muted">Your staff role can’t see jobs.</div>`;
+  return `<div class="card" id="pplJobs"><div class="muted">Loading…</div></div>`;
+}
+async function pplLoadHours(){
+  const box=el('pplJobs'); if(!box) return;
+  const [t,l]=await Promise.all([sb.from('job_team').select('*').eq('worker_id',PREC.id).order('start_date',{ascending:false}),
+    sb.from('labour_entries').select('job_id,hours,ot_hours,status').eq('worker_id',PREC.id).neq('status','void')]);
+  const hrs={}; (l.data||[]).forEach(x=>{ hrs[x.job_id]=hrs[x.job_id]||{c:0,p:0}; hrs[x.job_id][x.status==='confirmed'?'c':'p']+=Number(x.hours||0)+Number(x.ot_hours||0); });
+  const ids=new Set([...(t.data||[]).map(x=>x.job_id), ...Object.keys(hrs)]);
+  const rows=[...ids].map(id=>({j:jobById(id)||{id,job_ref:'—'}, a:(t.data||[]).filter(x=>x.job_id===id), h:hrs[id]||{c:0,p:0}}));
+  box.innerHTML=`<table class="tbl"><thead><tr><th>Job</th><th>Client</th><th>Role and dates</th><th style="text-align:right">Hours confirmed</th><th style="text-align:right">Hours proposed</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td><b>${esc(r.j.job_ref||'')}</b><div class="muted" style="font-size:11.5px">${esc(r.j.title||'')}</div></td><td>${esc(jobClientName(r.j.client_id))}</td>
+      <td style="font-size:12.5px">${r.a.map(a=>`${esc(a.role)}: ${a.start_date?jobDate(a.start_date):'—'} – ${a.end_date?jobDate(a.end_date):'—'}${a.removed_at?' <span class="muted">(removed)</span>':''}${a.compliance_override_reason?`<div style="color:var(--amber)">Override: ${esc(a.compliance_override_reason)}</div>`:''}`).join('<br>')||'—'}</td>
+      <td style="text-align:right">${r.h.c||'—'}</td><td style="text-align:right">${r.h.p||'—'}</td></tr>`).join('')||'<tr><td colspan="5" class="muted" style="padding:12px">Not on any job yet.</td></tr>'}</tbody></table>`;
+}
+
+/* ---------------- compliance gate on the job Team tab ---------------- */
+async function pplCheckWorker(wid, start){
+  const box=el('jt_comp'); if(!box) return;
+  if(!wid){ box.innerHTML=''; return; }
+  const r=await sb.rpc('worker_compliance_problems',{p_worker:wid, p_on:start||ymd(new Date())});
+  const p=(r.data||[]);
+  box.innerHTML=p.length?`<div class="note" style="border-left:3px solid var(--red);padding-left:10px;font-size:12.5px">⛔ <b>Compliance block:</b> ${p.map(esc).join(' · ')}.${jobCan('compliance.override')?' You can override this as a Director, with a reason.':' A Director can override this.'}</div>`
+    :`<div class="note" style="border-left:3px solid var(--green);padding-left:10px;font-size:12.5px">✓ Cards in date for the start date</div>`;
+}
+
+/* ---------------- Site Team Profiles (client page) ---------------- */
+let STP={client:null, list:null, err:null, f:'current', job:'all', urls:{}};
+function pageTeamProfiles(){
+  if(!CLIENT) return emptyState('👈','Choose a client','');
+  if(STP.client!==CLIENT.id){ STP={client:CLIENT.id, list:null, err:null, f:'current', job:'all', urls:{}}; }
+  if(STP.list===null){ if(STP.err) return emptyState('⚠','Could not load the team', esc(STP.err)); stpLoad(); return emptyState('⏳','Loading the team…','One moment.'); }
+  const all=STP.list, jobs={}; all.forEach(p=>(p.jobs||[]).forEach(j=>{ jobs[j.job_id]=j; }));
+  const list=stpFiltered();
+  const n=s=>all.filter(p=>p.status===s).length;
+  const fb=(v,l)=>`<button class="edit-btn ${STP.f===v?'on':''}" onclick="STP.f='${v}';go('teams')">${l}</button>`;
+  setTimeout(()=>stpPhotos(),30);
+  return `<div class="sechead"><h3>👥 Site Team Profiles</h3><span class="sub">The Mercury team on ${esc(CLIENT.name)}’s jobs</span><span class="line"></span>
+      ${list.length?`<button class="addbtn" onclick="stpPack()">⬇ Profile pack (PDF)</button>`:''}</div>
+    <div class="grid kpis" style="margin-bottom:14px">${kpi('g','🦺','On site now',n('on_site'),'')}${kpi('','📅','Upcoming',n('upcoming'),'')}${kpi('','🗂','Previously',n('previous'),'')}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${fb('current','On site & upcoming')}${fb('on_site','On site now')}${fb('upcoming','Upcoming')}${fb('previous','Previously')}${fb('all','Everyone')}
+      <span style="width:10px"></span><select style="width:auto" onchange="STP.job=this.value;go('teams')"><option value="all">All jobs</option>${Object.values(jobs).map(j=>`<option value="${j.job_id}" ${STP.job===j.job_id?'selected':''}>${esc(j.job_ref+' · '+(j.title||''))}</option>`).join('')}</select></div>
+    ${list.length?`<div class="teamgrid">${list.map(stpCard).join('')}</div>`:emptyState('👥','Nobody to show','People appear here once they are allocated to one of your jobs.')}`;
+}
+async function stpLoad(){
+  const r=await sb.rpc('client_team_profiles',{p_client:CLIENT.id});
+  if(r.error){ STP.err=r.error.message; STP.list=null; } else STP.list=r.data||[];
+  if(CURRENT==='teams') go('teams');
+}
+function stpFiltered(){
+  return (STP.list||[]).filter(p=>(STP.f==='all' || (STP.f==='current'?['on_site','upcoming'].includes(p.status):p.status===STP.f))
+    && (STP.job==='all' || (p.jobs||[]).some(j=>j.job_id===STP.job)));
+}
+const STP_ST={on_site:['On site now','green'], upcoming:['Upcoming','cyan'], previous:['Previously','grey']};
+function stpCard(p){
+  const st=STP_ST[p.status]||['',''], role=(p.jobs||[])[0]||{};
+  return `<div class="teamcard" style="cursor:pointer" onclick="stpOpen('${p.worker_id}')">
+    <div style="display:flex;gap:12px;align-items:center">${stpAvatar(p,54)}<div><div style="font-weight:800">${esc(p.name)}</div><div class="muted" style="font-size:12px">${esc([p.trade,role.role].filter((v,i,a)=>v&&a.indexOf(v)===i).join(' · ')||'Mercury team')}</div>
+      <div style="margin-top:4px"><span class="chip ${st[1]}" style="font-size:10.5px">${st[0]}</span></div></div></div>
+    <div style="margin-top:10px">${(p.cards||[]).map(c=>{ const s=pplCardState(c); return `<span class="chip ${s.c}" style="font-size:10px;margin:1px 2px 1px 0">${esc(c.type)}${s.c==='red'?' · expired':''}</span>`; }).join('')||'<span class="muted" style="font-size:11.5px">No cards recorded</span>'}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:8px">Mercury team · ${(p.jobs||[]).length} job${(p.jobs||[]).length===1?'':'s'} for ${esc(CLIENT.name)}</div></div>`;
+}
+function stpAvatar(p,size){ const ini=String(p.name||'·').split(/\s+/).map(x=>x[0]).join('').slice(0,2).toUpperCase();
+  return `<span class="stp-av" data-photo="${esc(p.photo_path||'')}" style="display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:50%;background:var(--panel2);border:1px solid var(--line2);font-weight:800;font-size:${Math.round(size/2.8)}px;flex:none;background-size:cover;background-position:center">${esc(ini)}</span>`; }
+async function stpUrl(path){ if(!path) return null; if(STP.urls[path]) return STP.urls[path]; try{ const r=await sb.storage.from('people').createSignedUrl(path,900); if(r.data&&r.data.signedUrl){ STP.urls[path]=r.data.signedUrl; return r.data.signedUrl; } }catch(e){} return null; }
+async function stpPhotos(){ for(const x of document.querySelectorAll('.stp-av[data-photo]')){ if(!x.dataset.photo||x.dataset.done) continue; x.dataset.done='1'; const u=await stpUrl(x.dataset.photo); if(u){ x.style.backgroundImage=`url("${u}")`; x.textContent=''; } } }
+function stpOpen(wid){
+  const p=(STP.list||[]).find(x=>x.worker_id===wid); if(!p) return;
+  const st=STP_ST[p.status]||['',''];
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:640px"><div class="modal-h"><h3>${esc(p.name)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div style="display:flex;gap:14px;align-items:center;margin-bottom:12px">${stpAvatar(p,86)}<div><div style="font-weight:800;font-size:16px">${esc(p.name)}</div><div class="muted">${esc(p.trade||'')}</div><div style="margin-top:4px"><span class="chip ${st[1]}">${st[0]}</span> <span class="chip">Mercury team</span></div></div></div>
+      <div style="font-weight:700;margin:8px 0 6px">Cards &amp; competencies</div>
+      <table class="tbl"><thead><tr><th>Card</th><th>Number</th><th>Expiry</th><th>Status</th><th></th></tr></thead><tbody>${(p.cards||[]).map(c=>{ const s=pplCardState(c); return `<tr><td>${esc(c.type)}</td><td>${esc(c.number||'—')}</td><td>${c.expiry?jobDate(c.expiry):'—'}</td><td><span class="chip ${s.c}" style="font-size:10.5px">${esc(s.label)}</span></td><td>${c.scan_path||c.scan_url?`<button class="btn-ghost" style="padding:3px 8px" onclick="stpScan('${jss(c.scan_path||'')}','${jss(c.scan_url||'')}')">View scan</button>`:''}</td></tr>`; }).join('')||'<tr><td colspan="5" class="muted">No cards recorded.</td></tr>'}</tbody></table>
+      <div style="font-weight:700;margin:14px 0 6px">Jobs for ${esc(CLIENT.name)}</div>
+      <table class="tbl"><tbody>${(p.jobs||[]).map(j=>`<tr><td><b>${esc(j.job_ref)}</b> ${esc(j.title||'')}<div class="muted" style="font-size:11.5px">${esc(j.site||'')}</div></td><td>${esc(j.role||'')}</td><td style="white-space:nowrap">${j.start?jobDate(j.start):'—'} – ${j.end?jobDate(j.end):'—'}</td></tr>`).join('')}</tbody></table>
+    </div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Close</button><button class="btn" onclick="stpPack('${p.worker_id}')">⬇ Profile (PDF)</button></div></div>`;
+  document.body.appendChild(wrap); stpPhotos();
+}
+async function stpScan(path,url){
+  if(!path){ window.open(url,'_blank'); return; }
+  const w=window.open('about:blank','_blank'); const u=await stpUrl(path);
+  if(!u){ if(w) w.close(); return alert('Could not open the scan.'); }
+  if(w) w.location.href=u; else window.open(u,'_blank');
+}
+async function stpPack(wid){
+  if(!window.jspdf){ alert('PDF tool still loading — try again in a moment.'); return; }
+  const people=wid?(STP.list||[]).filter(p=>p.worker_id===wid):stpFiltered();
+  if(!people.length) return;
+  const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'pt',format:'a4'}); const W=595,H=842,L=40,R=W-40;
+  const job=STP.job!=='all'?((people[0].jobs||[]).find(j=>j.job_id===STP.job)):null;
+  for(const [i,p] of people.entries()){
+    if(i) doc.addPage();
+    doc.setFillColor(10,14,22); doc.rect(0,0,W,86,'F');
+    try{ doc.addImage(MLOGO,'PNG',L,18,48,48); }catch(e){}
+    doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(17); doc.text('Site Team Profile',L+62,42);
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(180,200,220); doc.text(`${CLIENT.name}${job?'  ·  '+job.job_ref+' '+(job.title||''):''}  ·  Mercury team`,L+62,60);
+    let y=118;
+    const photo=await stpUrl(p.photo_path); const du=photo?await urlToDataUrl(photo):null;
+    if(du){ try{ doc.addImage(du, du.indexOf('png')>-1?'PNG':'JPEG', L, y, 96, 96); }catch(e){} }
+    else { doc.setFillColor(236,242,248); doc.rect(L,y,96,96,'F'); doc.setTextColor(120,135,150); doc.setFontSize(28); doc.text(String(p.name||'').split(/\s+/).map(x=>x[0]).join('').slice(0,2).toUpperCase(), L+48, y+58, {align:'center'}); }
+    doc.setTextColor(15,32,51); doc.setFont('helvetica','bold'); doc.setFontSize(18); doc.text(String(p.name||''), L+116, y+26);
+    doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(90,107,128);
+    doc.text([p.trade||'', (p.jobs||[]).map(j=>j.role).filter((v,k,a)=>v&&a.indexOf(v)===k).join(', ')].filter(Boolean).join(' · ')||'Mercury team', L+116, y+46);
+    doc.text((STP_ST[p.status]||[''])[0], L+116, y+64);
+    y+=124;
+    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(90,107,128); doc.text('CARDS & COMPETENCIES',L,y); y+=8;
+    doc.setFillColor(236,242,248); doc.rect(L,y,R-L,18,'F'); doc.setFontSize(8.5); doc.setTextColor(60,76,96);
+    doc.text('CARD',L+6,y+12); doc.text('NUMBER',L+200,y+12); doc.text('EXPIRY',L+330,y+12); doc.text('STATUS',L+430,y+12); y+=24;
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(15,32,51);
+    (p.cards||[]).forEach(c=>{ const s=pplCardState(c); doc.text(String(c.type),L+6,y); doc.text(String(c.number||'—'),L+200,y); doc.text(c.expiry?jobDate(c.expiry):'—',L+330,y); doc.text(s.label,L+430,y); y+=16; });
+    if(!(p.cards||[]).length){ doc.text('No cards recorded.',L+6,y); y+=16; }
+    y+=12; doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(90,107,128); doc.text('JOBS FOR '+String(CLIENT.name).toUpperCase(),L,y); y+=14;
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(15,32,51);
+    (p.jobs||[]).slice(0,8).forEach(j=>{ doc.text(`${j.job_ref}  ${j.title||''}${j.site?' — '+j.site:''}`.slice(0,90),L+6,y); doc.setTextColor(90,107,128); doc.text(`${j.role||''}  ${j.start?jobDate(j.start):''}${j.end?' – '+jobDate(j.end):''}`,R,y,{align:'right'}); doc.setTextColor(15,32,51); y+=15; });
+    // shared scans (images only; a PDF scan is listed)
+    const scans=(p.cards||[]).filter(c=>c.scan_path||c.scan_url);
+    if(scans.length){ y+=12; doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(90,107,128); doc.text('SCANS',L,y); y+=10; let col=0;
+      for(const c of scans){ const u=c.scan_path?await stpUrl(c.scan_path):c.scan_url; const isPdf=/\.pdf(\?|$)/i.test(c.scan_name||c.scan_path||c.scan_url||'');
+        const d=(!isPdf&&u)?await urlToDataUrl(u):null;
+        if(y>H-170){ doc.addPage(); y=48; col=0; }
+        if(d && /^data:image/.test(d)){ try{ doc.addImage(d, d.indexOf('png')>-1?'PNG':'JPEG', L+col*((R-L)/2+6), y, (R-L)/2-6, 130); }catch(e){} doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(90,107,128); doc.text(String(c.type), L+col*((R-L)/2+6), y+142); }
+        else { doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(15,32,51); doc.text(`${c.type}: scan on file (PDF) — available from Mercury on request`, L+col*((R-L)/2+6), y+12); }
+        if(col===1){ y+=156; col=0; } else col=1; }
+    }
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(150,160,175); doc.text('Mercury Automated Solutions · profile generated '+new Date().toLocaleDateString('en-GB'),L,H-26);
+  }
+  doc.save(`Team-profiles-${String(CLIENT.name).replace(/[^a-z0-9]+/gi,'_')}${wid?'-'+String(people[0].name).replace(/[^a-z0-9]+/gi,'_'):''}.pdf`);
 }
 </script>
 </body>
