@@ -4978,7 +4978,7 @@ async function ntfRemove(id){
 }
 
 /* Pages that still show the client picked in the side menu (release 9) */
-const CLIENT_SCOPED_PAGES=['sites','schedule','rota','teams','callouts','shifts','installs','gallery','project','documents','notify','command','risks','quotes','requests','reports','analytics','overview','completed','checkins'];
+const CLIENT_SCOPED_PAGES=['sites','schedule','rota','teams','callouts','shifts','installs','gallery','project','documents','notify','quotes','requests','reports','analytics','overview','completed','checkins'];
 const TITLES={hq:'HQ — Business Overview',digest:'Daily Digest',clients:'Clients',jobs:'Job Status — Mobilisation Control',completed:'Completed Works',crm:'Pipeline',pipeline:'Pipeline',command:'Command Centre',checkins:'Site Check-ins',engineers:'Engineers',personrec:'Engineer',compliance:'Compliance — Expiries & Right to Work',overview:'Programme Overview',sites:'Progress',schedule:'Schedule',rota:'Shift Rota',teams:'Site Team Profiles',installs:'Install Reports',risks:'Risk Register',callouts:'Call-Out Reports',shifts:'Shift Reports',reports:'Activity Feed',gallery:'Photo Evidence',analytics:'Analytics & Insights',documents:'Documents',notify:'Email Updates',project:'Project Plan',requests:'Work Requests',quotes:'Quote Requests',quality:'Quality & Handover',suppliers:'Suppliers — Labour Partners',finance:'Profit & Margins',sup_home:'Dashboard',sup_engineers:'Engineers',sup_jobs:'Bookings',sup_timesheets:'Timesheets',sup_feedback:'Performance & Feedback',sup_docs:'Compliance & Documents'};
 function go(page){
   CURRENT=page;
@@ -4989,8 +4989,8 @@ function go(page){
     if(cr) cr.textContent = CLIENT_SCOPED_PAGES.includes(page) && CLIENT ? CLIENT.name : 'Mercury'; } }catch(e){}
   let html='';
   try{
-    if(page==='hq')html=pageHQ();
-    else if(page==='digest')html=pageDigest();
+    if(page==='hq')html=(PROFILE.role==='admin'?pageHQ2():pageHQ());
+    else if(page==='digest')html=(PROFILE.role==='admin'?pageDigest2():pageDigest());
     else if(page==='engineers')html=pagePeople();
     else if(page==='personrec')html=pagePersonRec();
     else if(page==='compliance')html=pageCompliance();
@@ -5012,7 +5012,7 @@ function go(page){
     else if(page==='commercial')html=pageCommercial();
     else if(page==='xero')html=pageXero();
     else if(!CLIENT){ html=emptyState('👈','Choose a client','Pick a client from the dropdown above'+(PROFILE.role==='admin'?', the Clients page or HQ':'')+' to open their dashboard.'); }
-    else if(page==='command')html=pageCommand();
+    else if(page==='command')html=(PROFILE.role==='admin'&&VIEW!=='client'?pageCommand2():pageCommand());
     else if(page==='checkins')html=pageCheckins();
     else if(page==='overview')html=pageOverview();
     else if(page==='sites')html=(PROFILE.role==='engineer'?pageSites():pageProgress());
@@ -5020,7 +5020,7 @@ function go(page){
     else if(page==='rota')html=(PROFILE.role==='engineer'?pageRota():pageRotaTeam());
     else if(page==='teams')html=(PROFILE.role==='engineer'?pageTeams():pageTeamProfiles());
     else if(page==='installs')html=pageInstalls();
-    else if(page==='risks')html=pageRisks();
+    else if(page==='risks')html=(PROFILE.role==='admin'&&VIEW!=='client'?pageRiskRegister():pageRisks());
     else if(page==='callouts')html=pageCallouts();
     else if(page==='shifts')html=pageShifts();
     else if(page==='reports')html=(PROFILE.role==='engineer'?pageReports():pageActivity());
@@ -5040,7 +5040,7 @@ function go(page){
   el('content').innerHTML=html;
   Object.values(charts).forEach(c=>{try{c.destroy()}catch(e){}});charts={};
   buildCharts(page);
-  if(page==='command'||page==='checkins') setTimeout(initOpsMap, 60);
+  if((page==='command'&&!(PROFILE.role==='admin'&&VIEW!=='client'))||page==='checkins') setTimeout(initOpsMap, 60);
 }
 function buildCharts(page){
   if(typeof Chart==='undefined')return;
@@ -9658,6 +9658,296 @@ async function ntfLoadLog(){
       <td>${esc(x.recipient||'')}<div class="muted" style="font-size:11.5px">${esc(x.email||'')}</div></td><td>${esc(x.subject||x.update_kind||'')}</td>
       <td>${esc(x.delivery==='instant'?'Straight away':'Daily summary')}</td><td>${chip(x.status)}${x.status==='failed'&&x.last_error?`<div class="muted" style="font-size:11px">${esc(String(x.last_error).slice(0,120))}</div>`:''}</td></tr>`).join('')
       || '<tr><td colspan="5" class="muted" style="padding:12px">Nothing emailed yet.</td></tr>'}</tbody></table></div>`;
+}
+/* ===================================================================
+   HOME PAGES  —  release 17 (build release 9).
+   HQ weekly dashboard, Daily Digest "My day", Command Centre for the
+   Project Owner / Manager, and the rebuilt Risk Register.
+   =================================================================== */
+
+let HOME=null, HOME_ERR=null, HOME_LOADING=false, HOME_P=null;
+let HQW=null;                         // Monday of the week shown on HQ
+let DG_MODE='mine', CC_F={scope:'mine', client:'all'};
+let RISK_F={client:'all', job:'all', level:'all', owner:'all', status:'active', q:''};
+const RISK_LEVELS=[['Low','grey'],['Medium','cyan'],['High','amber'],['Critical','red']];
+const RISK_ST={open:['Open','amber'], mitigating:['Mitigating','cyan'], closed:['Closed','grey']};
+
+function homeWeek(d){ const x=new Date(d||Date.now()); const k=(x.getDay()+6)%7; x.setDate(x.getDate()-k); x.setHours(0,0,0,0); return x; }
+function homeIn(ts, from, to){ if(!ts) return false; const s=String(ts).slice(0,10); return s>=from && s<to; }
+function homeSum(list, f, cur){ const by={}; list.forEach(x=>{ const c=(cur?cur(x):x.currency)||'GBP'; by[c]=(by[c]||0)+Number(typeof f==='function'?f(x):x[f]||0); });
+  return Object.keys(by).sort().map(c=>jobMoney(by[c],c).replace(/\.00$/,'')).join(' · ')||'—'; }
+function homeLoad(){ if(HOME_LOADING) return HOME_P; HOME_P=homeLoadNow(); return HOME_P; }
+async function homeLoadNow(){
+  HOME_LOADING=true; HOME_ERR=null;
+  try{
+    await clPerms();
+    const can=p=>jobCan(p), since=ymd(new Date(Date.now()-120*86400000));
+    const tasks=[
+      can('jobs.view') && JOBREG===null ? loadJobRegister() : null,
+      can('quotes.view') && QUOTES===null ? loadQuotes() : null,
+      (!LOGINS||!LOGINS.length) ? loadLogins() : null];
+    await Promise.all(tasks.filter(Boolean));
+    const q=(cond, fn)=>cond?fn().then(r=>r).catch(e=>{ console.warn(e); return []; }):Promise.resolve([]);
+    const [reqs, stages, vars, labour, co, sh, pr, risks, pos, ts, xero, cards, gps, sdocs] = await Promise.all([
+      q(true, ()=>jobFetchAll(()=>sb.from('work_requests').select('id,client_id,title,status,created_at,kind').eq('status','New'))),
+      q(can('jobs.view'), ()=>jobFetchAll(()=>sb.from('job_billing_stages').select('id,job_id,label,amount,planned_date,status,invoice_date,invoiced_amount'))),
+      q(can('jobs.view'), ()=>jobFetchAll(()=>sb.from('job_variations').select('id,job_id,var_ref,title,status,submitted_at').eq('status','submitted'))),
+      q(can('cost_rates.view'), ()=>jobFetchAll(()=>sb.from('labour_entries').select('id,job_id,hours,ot_hours').eq('status','proposed'))),
+      q(true, ()=>jobFetchAll(()=>sb.from('callout_reports').select('id,client_id,job_id,site_id,site_name,job_number,priority,status,submitted_at,fault_description,engineer,needs_job,latitude,longitude').gte('submitted_at',since).order('submitted_at',{ascending:false}))),
+      q(true, ()=>jobFetchAll(()=>sb.from('shift_reports').select('id,client_id,job_id,site_name,engineer,work_completed,submitted_at,needs_job').gte('submitted_at',since).order('submitted_at',{ascending:false}))),
+      q(true, ()=>jobFetchAll(()=>sb.from('progress_reports').select('id,client_id,job_id,site_id,engineer,work_completed,progress_pct,plan_flag,report_date,submitted_at,needs_job').gte('submitted_at',since).order('submitted_at',{ascending:false}))),
+      q(true, ()=>jobFetchAll(()=>sb.from('risks').select('*').neq('risk_status','closed'))),
+      q(can('po.view'), ()=>jobFetchAll(()=>sb.from('purchase_orders').select('id,po_ref,job_id,supplier_id,status,required_by').in('status',['open','part_invoiced']))),
+      q(can('timesheets.approve'), ()=>jobFetchAll(()=>sb.from('supplier_timesheets').select('id,supplier_id,status,work_date').eq('status','Submitted'))),
+      q(can('xero.send'), ()=>sb.from('xero_outbox').select('item_type,source_id,ref,can_send').then(r=>r.data||[])),
+      q(true, ()=>jobFetchAll(()=>sb.from('person_cards').select('id,worker_id,card_type,expiry').is('archived_at',null).lte('expiry',ymd(new Date(Date.now()+7*86400000))))),
+      q(true, ()=>sb.from('gps_events').select('*').order('event_at',{ascending:false}).limit(500).then(r=>r.data||[])),
+      q(true, ()=>jobFetchAll(()=>sb.from('supplier_documents').select('id,supplier_id,label,doc_type,expiry').lte('expiry',ymd(new Date(Date.now()+7*86400000)))))]);
+    let workers=[];
+    if(cards.length){ const w=await sb.from('workers').select('id,full_name,active').in('id',[...new Set(cards.map(c=>c.worker_id))]); workers=w.data||[]; }
+    HOME={reqs, stages, vars, labour, co, sh, pr, risks, pos, ts, xero, cards, workers, gps, sdocs, at:Date.now()};
+  }catch(e){ HOME_ERR=e.message||String(e); HOME=null; }
+  HOME_LOADING=false;
+  const b=document.querySelector('.nav-btn[data-page="hq"]');
+  if(b && HOME){ const n=homeAttention().length; let x=b.querySelector('.nav-badge'); if(n){ if(!x){ x=document.createElement('span'); x.className='nav-badge'; b.appendChild(x); } x.textContent=n; } else if(x) x.remove(); }
+  if(['hq','digest','command','risks'].includes(CURRENT)) go(CURRENT);
+}
+function homeReload(){ HOME=null; QUOTES=null; JOBREG=null; homeLoad(); }
+function homeGate(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','');
+  if(!HOME){ if(HOME_ERR) return emptyState('⚠','Could not load',esc(HOME_ERR)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="HOME_ERR=null;homeReload()">Try again</button></div>`); homeLoad(); return emptyState('⏳','Loading…','One moment.'); }
+  return null;
+}
+const homeJob=id=>(JOBREG||[]).find(j=>j.id===id)||null;
+const homeClient=id=>{ const c=(CLIENTS||[]).find(x=>x.id===id); return c?c.name:''; };
+function homeOpenCo(){ return (HOME.co||[]).filter(isOpenCallout); }
+
+/* ---------- Needs attention (HQ list and the menu number) ---------- */
+function homeAttention(){
+  if(!HOME) return [];
+  const out=[];
+  (JOBREG||[]).filter(j=>!j.archived_at && JOB_OPEN.includes(j.status) && (JOBPNL[j.id]||{}).rag==='red').forEach(j=>out.push({sev:0, ic:'🔴', t:`${j.job_ref} is forecast to lose margin`, m:homeClient(j.client_id)+' · '+(j.title||''), go:`openJobForm('${j.id}')`}));
+  homeOpenCo().filter(r=>r.priority==='Priority 1').forEach(r=>out.push({sev:0, ic:'🚨', t:'Priority 1 call-out: '+textOnly(r.fault_description||''), m:homeClient(r.client_id)+' · '+slaState(r).label, go:`enterClientTo('${r.client_id}','callouts')`}));
+  homeOpenCo().filter(r=>r.priority!=='Priority 1' && slaState(r).cls==='breach').forEach(r=>out.push({sev:1, ic:'⏱', t:'SLA breached: '+textOnly(r.fault_description||'call-out'), m:homeClient(r.client_id)+' · '+(r.priority||''), go:`enterClientTo('${r.client_id}','callouts')`}));
+  (JOBREG||[]).filter(j=>!j.archived_at && j.status==='ready_to_invoice').forEach(j=>out.push({sev:2, ic:'💷', t:`${j.job_ref} is ready to invoice`, m:homeClient(j.client_id)+' · '+(j.title||''), go:`openJobForm('${j.id}')`}));
+  return out.sort((a,b)=>a.sev-b.sev).slice(0,8);
+}
+hqAttentionCount=function(){ return HOME?homeAttention().length:0; };
+
+/* ---------- HQ: weekly management dashboard ---------- */
+function pageHQ2(){
+  const g=homeGate(); if(g) return g;
+  if(!HQW) HQW=homeWeek();
+  const from=ymd(HQW), toD=new Date(HQW); toD.setDate(toD.getDate()+7); const to=ymd(toD);
+  const Q=QUOTES||[], J=JOBREG||[];
+  const issued=Q.filter(q=>homeIn(q.issued_at,from,to));
+  const won=Q.filter(q=>homeIn(q.converted_at||q.accepted_at,from,to));
+  const lost=Q.filter(q=>q.status==='rejected' && homeIn(q.updated_at,from,to));
+  const newJobs=J.filter(j=>homeIn(j.created_at,from,to));
+  const live=J.filter(j=>!j.archived_at && JOB_OPEN.includes(j.status));
+  const pnl=jobCan('margins.view'), P=id=>JOBPNL[id]||{};
+  const gp=live.reduce((a,j)=>a+Number(P(j.id).forecast_gp||0),0), val=live.reduce((a,j)=>a+Number((JOBAGG[j.id]||{}).revised||j.contract_value||0),0);
+  const invoiced=(HOME.stages||[]).filter(s=>s.status==='invoiced' && homeIn(s.invoice_date,from,to));
+  const jobCur=id=>(homeJob(id)||{}).currency||'GBP';
+  const wkSh=(HOME.sh||[]).filter(r=>homeIn(r.submitted_at,from,to)).length, wkCo=(HOME.co||[]).filter(r=>homeIn(r.submitted_at,from,to)).length;
+  const openCo=homeOpenCo(), breaches=openCo.filter(r=>slaState(r).cls==='breach').length;
+  const thisW=ymd(homeWeek()), lastW=ymd(homeWeek(Date.now()-7*86400000));
+  const att=homeAttention();
+  const fig=(ic,l,v,sub,cls)=>`<div class="card kpi ${cls||''}"><div class="spark">${ic}</div><div class="lbl">${l}</div><div class="val" style="font-size:${String(v).length>9?'18px':''}">${v}</div>${sub?`<div class="muted" style="font-size:12px;margin-top:2px">${sub}</div>`:''}</div>`;
+  setTimeout(hqChart,60);
+  return `<div class="sechead"><h3>🏠 HQ Overview</h3><span class="sub">Week of ${jobDate(from)}</span><span class="line"></span>
+      <button class="edit-btn ${from===thisW?'on':''}" onclick="HQW=homeWeek();go('hq')">This week</button>
+      <button class="edit-btn ${from===lastW?'on':''}" onclick="HQW=homeWeek(Date.now()-7*86400000);go('hq')">Last week</button>
+      <label style="font-size:12.5px">Any week <input type="date" style="width:auto" value="${from}" onchange="if(this.value){HQW=homeWeek(this.value+'T12:00:00');go('hq')}"></label>
+      <button class="btn-ghost" onclick="homeReload()">Refresh</button></div>
+    <div style="font-weight:700;margin:4px 0 8px">Quotes and jobs</div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${fig('📤','Quotes issued',issued.length,homeSum(issued,'total_sell'))}
+      ${fig('🏆','Quotes won',won.length,homeSum(won,'total_sell'),'g')}
+      ${fig('🎯','Win rate',won.length+lost.length?Math.round(won.length/(won.length+lost.length)*100)+'%':'—',`${won.length} won · ${lost.length} lost`)}
+      ${fig('📋','New jobs',newJobs.length,'')}</div>
+    ${pnl?`<div style="font-weight:700;margin:4px 0 8px">P&amp;L <span class="muted" style="font-weight:500;font-size:12px">· Director and Commercial only</span></div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${fig('💼','Live jobs value',homeSum(live,j=>(JOBAGG[j.id]||{}).revised||j.contract_value),live.length+' open jobs')}
+      ${fig('📈','Forecast gross profit',homeSum(live,j=>P(j.id).forecast_gp),val?'Margin '+(gp/val*100).toFixed(1)+'%':'')}
+      ${fig('🚦','Red / orange jobs',`${live.filter(j=>P(j.id).rag==='red').length} / ${live.filter(j=>P(j.id).rag==='orange').length}`,'',live.some(j=>P(j.id).rag==='red')?'r':'')}
+      ${fig('💷','Invoiced this week',homeSum(invoiced,s=>s.invoiced_amount,s=>jobCur(s.job_id)),invoiced.length+' stage'+(invoiced.length===1?'':'s'))}</div>`:''}
+    <div style="font-weight:700;margin:4px 0 8px">Reports and call-outs</div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${fig('🗓','Shift reports',wkSh,'this week')}${fig('🔧','Call-out reports',wkCo,'this week')}
+      ${fig('📂','Call-outs still open',openCo.length,'')}${fig('⏱','SLA breaches',breaches,'',breaches?'r':'g')}</div>
+    <div class="row2">
+      <div class="card"><h4 style="margin:0 0 6px">Last 12 weeks</h4><div class="csub">Quotes issued and won (count), and value invoiced</div><div style="height:240px"><canvas id="hqChart"></canvas></div></div>
+      <div class="card"><h4 style="margin:0 0 6px">⚠ Needs attention</h4>${att.length?`<div class="list">${att.map(a=>`<div class="litem" style="cursor:pointer" onclick="${a.go}"><div class="av">${a.ic}</div><div class="bd"><div class="t">${esc(a.t)}</div><div class="m">${esc(a.m)}</div></div><div class="when">→</div></div>`).join('')}</div>`:'<div class="empty"><div class="big">✅</div><b>Nothing needs attention</b></div>'}</div></div>`;
+}
+function hqChart(){
+  const c=el('hqChart'); if(!c||typeof Chart==='undefined') return;
+  const weeks=[...Array(12)].map((_,i)=>homeWeek(Date.now()-(11-i)*7*86400000));
+  const k=d=>ymd(homeWeek(String(d).slice(0,10)+'T12:00:00'));
+  const lab=weeks.map(w=>w.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})), keys=weeks.map(w=>ymd(w));
+  const cnt=(list,f)=>keys.map(x=>list.filter(q=>f(q)&&k(f(q))===x).length);
+  const Q=QUOTES||[];
+  const inv=keys.map(x=>(HOME.stages||[]).filter(s=>s.status==='invoiced'&&s.invoice_date&&k(s.invoice_date)===x).reduce((a,s)=>a+Number(s.invoiced_amount||0),0));
+  try{ charts.hq=new Chart(c,{data:{labels:lab,datasets:[
+      {type:'bar',label:'Quotes issued',data:cnt(Q,q=>q.issued_at),backgroundColor:'#38bdf8',borderRadius:5,yAxisID:'y'},
+      {type:'bar',label:'Quotes won',data:cnt(Q,q=>q.converted_at||q.accepted_at),backgroundColor:'#22c55e',borderRadius:5,yAxisID:'y'},
+      {type:'line',label:'Invoiced',data:inv,borderColor:'#f59e0b',backgroundColor:'#f59e0b',tension:.3,yAxisID:'y1'}]},
+    options:{maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}}},scales:{y:{beginAtZero:true,ticks:{precision:0}},y1:{beginAtZero:true,position:'right',grid:{display:false}},x:{grid:{display:false}}}}}); }catch(e){ console.warn(e); }
+}
+
+/* ---------- Daily Digest: My day ---------- */
+function pageDigest2(){
+  const g=homeGate(); if(g) return g;
+  const me=PROFILE.id, mine=DG_MODE==='mine', today=ymd(new Date()), soon=ymd(new Date(Date.now()+7*86400000));
+  const daysAgo=n=>ymd(new Date(Date.now()-n*86400000));
+  const Q=(QUOTES||[]).filter(q=>!q.archived_at && !q.job_id), J=(JOBREG||[]).filter(j=>!j.archived_at);
+  const myJob=j=>!mine || j.job_manager===me, myQ=q=>!mine || q.project_owner===me;
+  const jobOf=id=>homeJob(id);
+  const sec={quotes:[], jobs:[], money:[], ops:[]};
+  const add=(s,ic,t,m,go,cls)=>sec[s].push({ic,t,m,go,cls});
+  // quotes
+  (HOME.reqs||[]).forEach(r=>add('quotes','📥','New quote request: '+(r.title||''),homeClient(r.client_id)+' · received '+jobDate(String(r.created_at).slice(0,10)),`go('qrequests')`));
+  Q.filter(q=>q.status==='issued' && q.valid_until && String(q.valid_until)<=soon && myQ(q)).forEach(q=>add('quotes','⌛',`${qRefText(q)} expires ${jobDate(q.valid_until)}`,homeClient(q.client_id)+' · '+q.title,`openQuote('${q.id}')`,String(q.valid_until)<today?'red':'amber'));
+  Q.filter(q=>q.status==='issued' && q.issued_at && String(q.issued_at).slice(0,10)<=daysAgo(14) && myQ(q)).forEach(q=>add('quotes','📭',`${qRefText(q)}: no reply since ${jobDate(String(q.issued_at).slice(0,10))}`,homeClient(q.client_id)+' · '+q.title,`openQuote('${q.id}')`));
+  Q.filter(q=>['lead','pending','issued'].includes(q.status) && q.follow_up_date && String(q.follow_up_date)<=today && myQ(q)).forEach(q=>add('quotes','📞',`Follow up ${qRefText(q)}${String(q.follow_up_date)<today?' (overdue)':''}`,homeClient(q.client_id)+' · '+q.title,`openQuote('${q.id}')`,String(q.follow_up_date)<today?'red':''));
+  // jobs
+  J.filter(j=>myJob(j) && ['created','mobilising','live'].includes(j.status) && j.end_date && String(j.end_date)<=today).forEach(j=>add('jobs','🏁',`${j.job_ref} ${String(j.end_date)<today?'is past its end date':'finishes today'}`,homeClient(j.client_id)+' · '+j.title,`openJobForm('${j.id}')`,String(j.end_date)<today?'red':'amber'));
+  J.filter(j=>myJob(j) && j.start_date && String(j.start_date)===today && ['created','mobilising'].includes(j.status)).forEach(j=>add('jobs','🚀',`${j.job_ref} starts today`,homeClient(j.client_id)+' · '+j.title,`openJobForm('${j.id}')`));
+  (HOME.vars||[]).filter(v=>v.submitted_at && String(v.submitted_at).slice(0,10)<=daysAgo(7)).forEach(v=>{ const j=jobOf(v.job_id); if(j&&myJob(j)) add('jobs','📝',`Variation ${v.var_ref||''} has no answer since ${jobDate(String(v.submitted_at).slice(0,10))}`,j.job_ref+' · '+(v.title||''),`openJobForm('${j.id}')`); });
+  const hrs={}; (HOME.labour||[]).forEach(l=>{ hrs[l.job_id]=(hrs[l.job_id]||0)+Number(l.hours||0)+Number(l.ot_hours||0); });
+  Object.keys(hrs).forEach(id=>{ const j=jobOf(id); if(j&&myJob(j)) add('jobs','⏱',`${hrs[id]} hours to confirm on ${j.job_ref}`,homeClient(j.client_id)+' · '+j.title,`openJobForm('${j.id}')`); });
+  const nj=[...(HOME.co||[]),...(HOME.sh||[]),...(HOME.pr||[])].filter(r=>r.needs_job);
+  const njBy={}; nj.forEach(r=>{ njBy[r.client_id]=(njBy[r.client_id]||0)+1; });
+  if(jobCan('jobs.edit')) Object.keys(njBy).forEach(c=>add('jobs','🔗',`${njBy[c]} report${njBy[c]===1?'':'s'} need${njBy[c]===1?'s':''} a job`,homeClient(c),`enterClientTo('${c}','shifts')`,'amber'));
+  (HOME.risks||[]).filter(r=>['High','Critical'].includes(r.risk_level)).forEach(r=>{ const j=r.job_id?jobOf(r.job_id):null; if(!mine || r.owner_id===me || (j&&j.job_manager===me)) add('jobs','⚠',`${r.risk_level} risk: ${r.title}`,[homeClient(r.client_id), j?j.job_ref:''].filter(Boolean).join(' · ')+(r.due_date?' · due '+jobDate(r.due_date):''),`go('risks')`,r.risk_level==='Critical'?'red':'amber'); });
+  // purchasing and invoicing
+  (HOME.stages||[]).filter(s=>s.status==='planned' && s.planned_date && String(s.planned_date)<=today).forEach(s=>{ const j=jobOf(s.job_id); if(j&&myJob(j)) add('money','📅',`Billing stage “${s.label}” ${String(s.planned_date)<today?'was due '+jobDate(s.planned_date):'is due today'}`,j.job_ref+' · '+homeClient(j.client_id),`openJobForm('${j.id}')`,String(s.planned_date)<today?'red':''); });
+  if(jobCan('invoices.record')) (HOME.stages||[]).filter(s=>s.status==='ready').forEach(s=>{ const j=jobOf(s.job_id); if(j) add('money','💷',`Ready to invoice: ${s.label} (${jobMoney(s.amount,j.currency)})`,j.job_ref+' · '+homeClient(j.client_id),`openJobForm('${j.id}')`); });
+  (HOME.pos||[]).filter(p=>p.required_by && String(p.required_by)<=today).forEach(p=>{ const j=jobOf(p.job_id); if(j&&myJob(j)) add('money','🚚',`${p.po_ref}: delivery ${String(p.required_by)<today?'overdue since':'due'} ${jobDate(p.required_by)}`,homeClient(j.client_id)+' · '+j.title,`openPO('${p.id}')`,String(p.required_by)<today?'red':''); });
+  if((HOME.ts||[]).length) add('money','🗂',`${HOME.ts.length} supplier timesheet${HOME.ts.length===1?'':'s'} to approve`,'',`go('suppliers')`);
+  const xw=(HOME.xero||[]).filter(x=>x.can_send).length; if(xw) add('money','🔄',`${xw} item${xw===1?'':'s'} ready to send to Xero`,'',`go('xero')`);
+  // operations
+  homeOpenCo().filter(r=>r.priority==='Priority 1' || slaState(r).cls==='breach').forEach(r=>{ const s=slaState(r); const j=r.job_id?jobOf(r.job_id):null; if(!mine || !j || j.job_manager===me) add('ops',r.priority==='Priority 1'?'🚨':'⏱',`${r.priority==='Priority 1'?'Priority 1 call-out':'SLA breached'}: ${textOnly(r.fault_description||'')}`,[homeClient(r.client_id), j?j.job_ref:'', s.label].filter(Boolean).join(' · '),`enterClientTo('${r.client_id}','callouts')`,'red'); });
+  const wn=id=>(HOME.workers.find(w=>w.id===id)||{});
+  (HOME.cards||[]).filter(c=>wn(c.worker_id).active!==false).forEach(c=>add('ops','🪪',`${wn(c.worker_id).full_name||'Someone'}: ${c.card_type} ${String(c.expiry)<today?'expired '+jobDate(c.expiry):'expires '+jobDate(c.expiry)}`,'',`openPersonRecord('${c.worker_id}','cards')`,String(c.expiry)<today?'red':'amber'));
+  (HOME.sdocs||[]).forEach(d=>add('ops','📄',`Supplier document ${d.label||d.doc_type}: ${String(d.expiry)<today?'expired':'expires'} ${jobDate(d.expiry)}`,'',`go('suppliers')`,String(d.expiry)<today?'red':'amber'));
+  const box=(k,t,empty)=>`<div class="card" style="margin-bottom:12px"><h4 style="margin:0 0 6px">${t} <span class="muted" style="font-weight:500">${sec[k].length||''}</span></h4>${sec[k].length?`<div class="list">${sec[k].map(i=>`<div class="litem" style="cursor:pointer" onclick="${i.go}"><div class="av">${i.ic}</div><div class="bd"><div class="t"${i.cls==='red'?' style="color:var(--red)"':''}>${esc(i.t)}</div>${i.m?`<div class="m">${esc(i.m)}</div>`:''}</div><div class="when">→</div></div>`).join('')}</div>`:`<div class="muted" style="font-size:12.5px">${empty}</div>`}</div>`;
+  const total=Object.values(sec).reduce((a,x)=>a+x.length,0);
+  return `<div class="sechead"><h3>📨 My day</h3><span class="sub">${new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long'})} · ${total} thing${total===1?'':'s'} to action</span><span class="line"></span>
+      <button class="edit-btn ${mine?'on':''}" onclick="DG_MODE='mine';go('digest')">Mine</button><button class="edit-btn ${mine?'':'on'}" onclick="DG_MODE='all';go('digest')">Everyone</button><button class="btn-ghost" onclick="homeReload()">Refresh</button></div>
+    <div class="note" style="margin-bottom:12px">Overdue items stay here until they’re dealt with. ${mine?'Showing your jobs and quotes (as Project Owner / Manager), plus shared queues your role can action.':'Showing everything across the business.'}</div>
+    <div class="row2"><div>${box('quotes','📝 Quotes','Nothing on quotes today.')}${box('money','💷 Purchasing and invoicing','Nothing to chase.')}</div>
+      <div>${box('jobs','📋 Jobs','Nothing on your jobs today.')}${box('ops','🛠 Operations','No Priority 1s, SLA breaches or expiring cards.')}</div></div>`;
+}
+
+/* ---------- Command Centre (office): the Project Owner / Manager's daily view ---------- */
+function pageCommand2(){
+  const g=homeGate(); if(g) return g;
+  const me=PROFILE.id, today=ymd(new Date());
+  let jobs=(JOBREG||[]).filter(j=>!j.archived_at && JOB_OPEN.includes(j.status));
+  if(CC_F.scope==='mine') jobs=jobs.filter(j=>j.job_manager===me);
+  if(CC_F.client!=='all') jobs=jobs.filter(j=>j.client_id===CC_F.client);
+  const ids=new Set(jobs.map(j=>j.id)), clientsOf=new Set(jobs.map(j=>j.client_id));
+  const inScope=r=>CC_F.scope==='all'&&CC_F.client==='all'?true:(r.job_id?ids.has(r.job_id):(CC_F.scope==='all'&&clientsOf.has(r.client_id)));
+  const co=homeOpenCo().filter(inScope).map(r=>({r,s:slaState(r)})).sort((a,b)=>({breach:0,warn:1,ok:2}[a.s.cls]-{breach:0,warn:1,ok:2}[b.s.cls]));
+  const recent=[...(HOME.co||[]).map(r=>({...r,_t:'Call-out',_x:r.fault_description})),...(HOME.sh||[]).map(r=>({...r,_t:'Shift report',_x:r.work_completed})),...(HOME.pr||[]).map(r=>({...r,_t:'Install report',_x:r.work_completed}))]
+    .filter(inScope).sort((a,b)=>String(b.submitted_at).localeCompare(String(a.submitted_at))).slice(0,12);
+  const behind=(HOME.pr||[]).filter(r=>r.job_id && ids.has(r.job_id) && ['At Risk','Over Plan'].includes(r.plan_flag) && String(r.report_date||r.submitted_at).slice(0,10)>=ymd(new Date(Date.now()-7*86400000)));
+  const behindJobs=[...new Set(behind.map(r=>r.job_id))];
+  const risks=(HOME.risks||[]).filter(r=>['High','Critical'].includes(r.risk_level) && (r.job_id?ids.has(r.job_id):(CC_F.scope==='all'&&(CC_F.client==='all'||r.client_id===CC_F.client))));
+  const seen={}; (HOME.gps||[]).filter(e=>CC_F.client==='all'?(CC_F.scope==='all'||clientsOf.has(e.client_id)):e.client_id===CC_F.client).forEach(e=>{ const w=e.engineer||'Unknown'; if(!seen[w]) seen[w]=e; });
+  const jr=id=>{ const j=homeJob(id); return j?j.job_ref:''; };
+  const opt=(v,l,c)=>`<option value="${esc(v)}" ${v===c?'selected':''}>${esc(l)}</option>`;
+  const cl=[...new Set((JOBREG||[]).filter(j=>!j.archived_at&&JOB_OPEN.includes(j.status)).map(j=>j.client_id))];
+  return `<div class="sechead"><h3>🛰 Command Centre</h3><span class="sub">${CC_F.scope==='mine'?'Your jobs':'All jobs'} across every client · live</span><span class="line"></span>
+      <button class="edit-btn ${CC_F.scope==='mine'?'on':''}" onclick="CC_F.scope='mine';go('command')">My jobs</button><button class="edit-btn ${CC_F.scope==='all'?'on':''}" onclick="CC_F.scope='all';go('command')">All</button>
+      <select style="width:auto" onchange="CC_F.client=this.value;go('command')">${opt('all','All clients',CC_F.client)}${cl.map(c=>opt(c,homeClient(c),CC_F.client)).join('')}</select>
+      <button class="btn-ghost" onclick="homeReload()">Refresh</button></div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${kpi('','📋','Open jobs',jobs.length,'')}${kpi('c','🔧','Open call-outs',co.length,'')}${kpi(co.some(x=>x.s.cls==='breach')?'r':'g','⏱','SLA breaches',co.filter(x=>x.s.cls==='breach').length,'')}
+      ${kpi(behindJobs.length?'a':'g','📉','Behind plan',behindJobs.length,'')}${kpi(risks.length?'a':'g','⚠','High / Critical risks',risks.length,'')}</div>
+    <div class="row2">
+      <div class="card"><h4>⏱ Open call-outs &amp; SLA</h4>${co.length?co.map(({r,s})=>`<div class="sla ${s.cls}" style="cursor:pointer" onclick="enterClientTo('${r.client_id}','callouts')"><div class="ref">${esc(r.job_id?jr(r.job_id):(r.needs_job?'Needs a job':(r.job_number||'—')))}</div>
+          <div class="bd"><div class="t">${esc(textOnly(r.fault_description||'Call-out'))}</div><div class="m">${esc([homeClient(r.client_id), r.site_name, r.priority, r.status].filter(Boolean).join(' · '))}</div></div><div class="tm">${esc(s.label)}</div></div>`).join(''):'<div class="empty"><div class="big">✅</div><b>No open call-outs</b></div>'}</div>
+      <div class="card"><h4>🗒 Recent activity</h4>${recent.length?`<div class="list">${recent.map(r=>`<div class="litem"><div class="av">${r._t==='Call-out'?'🔧':r._t==='Shift report'?'🗓':'🔩'}</div><div class="bd"><div class="t">${esc(r._t)}${r.job_id?' · '+esc(jr(r.job_id)):''}</div><div class="m">${esc([homeClient(r.client_id), r.engineer].filter(Boolean).join(' · '))} — ${esc(String(r._x||'').slice(0,80))}</div></div><div class="when">${esc(rel(r.submitted_at))}</div></div>`).join('')}</div>`:'<div class="muted">No reports yet.</div>'}</div></div>
+    <div class="row2" style="margin-top:16px">
+      <div class="card"><h4>📉 Behind plan</h4>${behindJobs.length?`<div class="list">${behindJobs.map(id=>{ const j=homeJob(id), r=behind.find(x=>x.job_id===id); return `<div class="litem" style="cursor:pointer" onclick="openJobForm('${id}')"><div class="av">📉</div><div class="bd"><div class="t">${esc(j.job_ref)} · ${esc(j.title||'')}</div><div class="m">${esc(r.plan_flag)} on ${jobDate(String(r.report_date||r.submitted_at).slice(0,10))} · ${Math.round(r.progress_pct||0)}%${r.engineer?' · '+esc(r.engineer):''}</div></div></div>`; }).join('')}</div>`:'<div class="muted">No install reports behind plan in the last week.</div>'}</div>
+      <div class="card"><h4>⚠ High and Critical risks</h4>${risks.length?`<div class="list">${risks.map(r=>`<div class="litem" style="cursor:pointer" onclick="go('risks')"><div class="av">⚠</div><div class="bd"><div class="t">${esc(r.title)} <span class="chip ${r.risk_level==='Critical'?'red':'amber'}" style="font-size:10px">${esc(r.risk_level)}</span></div><div class="m">${esc([homeClient(r.client_id), r.job_id?jr(r.job_id):'', r.owner_id?qOwnerName(r.owner_id):(r.owner||'')].filter(Boolean).join(' · '))}</div></div></div>`).join('')}</div>`:'<div class="muted">No open High or Critical risks.</div>'}</div></div>
+    <div class="card" style="margin-top:16px"><h4>👷 Engineers — last known location</h4><div class="csub">From check-ins · times are when last seen, not continuous tracking</div>
+      ${Object.values(seen).length?`<div class="list">${Object.values(seen).slice(0,20).map(e=>`<div class="litem"><div class="av">${esc(String(e.engineer||'··').split(' ').map(w=>w[0]).join('').slice(0,2))}</div><div class="bd"><div class="t">${esc(e.engineer||'Unknown')} <span class="chip cyan" style="margin-left:4px">${esc(e.current_status||'Checked in')}</span></div><div class="m">${esc([homeClient(e.client_id), e.site_name].filter(Boolean).join(' · '))}</div></div><div class="when">${esc(rel(e.event_at))}${e.latitude&&e.longitude?` <a class="pdf-link" href="https://www.google.com/maps?q=${e.latitude},${e.longitude}" target="_blank">Map ↗</a>`:''}</div></div>`).join('')}</div>`:'<div class="muted">No check-ins yet.</div>'}</div>`;
+}
+
+/* ---------- Risk Register ---------- */
+function riskLvlChip(l){ const x=RISK_LEVELS.find(r=>r[0]===l)||[l,'grey']; return `<span class="chip ${x[1]}">${esc(l||'—')}</span>`; }
+function pageRiskRegister(){
+  const g=homeGate(); if(g) return g;
+  if(!HOME.allRisks){ sb.from('risks').select('*').order('created_at',{ascending:false}).then(r=>{ HOME.allRisks=r.data||[]; if(CURRENT==='risks') go('risks'); }); return emptyState('⏳','Loading risks…',''); }
+  const f=RISK_F, today=ymd(new Date()), q=f.q.trim().toLowerCase();
+  const list=HOME.allRisks.filter(r=>(f.client==='all'||r.client_id===f.client) && (f.job==='all'||r.job_id===f.job) && (f.level==='all'||r.risk_level===f.level)
+    && (f.owner==='all'||(f.owner==='me'?r.owner_id===PROFILE.id:r.owner_id===f.owner)) && (f.status==='all'||(f.status==='active'?r.risk_status!=='closed':r.risk_status===f.status))
+    && (!q||[r.title,r.description,r.mitigation].some(v=>String(v||'').toLowerCase().includes(q))))
+    .sort((a,b)=>(RISK_LEVELS.findIndex(x=>x[0]===b.risk_level)-RISK_LEVELS.findIndex(x=>x[0]===a.risk_level))||String(a.due_date||'9').localeCompare(String(b.due_date||'9')));
+  const act=HOME.allRisks.filter(r=>r.risk_status!=='closed');
+  const opt=(v,l,c)=>`<option value="${esc(v)}" ${v===c?'selected':''}>${esc(l)}</option>`;
+  const cl=[...new Set(HOME.allRisks.map(r=>r.client_id))];
+  const jobsF=(JOBREG||[]).filter(j=>f.client==='all'||j.client_id===f.client);
+  const owners=[...new Set(HOME.allRisks.map(r=>r.owner_id).filter(Boolean))];
+  const set=(k)=>`onchange="RISK_F.${k}=this.value;go('risks')"`;
+  return `<div class="sechead"><h3>⚠ Risk Register</h3><span class="sub">Across all clients · hidden from clients unless you choose to show one</span><span class="line"></span><button class="addbtn" onclick="riskForm()">＋ Add risk</button></div>
+    <div class="grid kpis" style="margin-bottom:14px">${kpi(act.some(r=>r.risk_level==='Critical')?'r':'g','🛑','Critical',act.filter(r=>r.risk_level==='Critical').length,'')}${kpi('a','⚠','High',act.filter(r=>r.risk_level==='High').length,'')}
+      ${kpi('','📋','Open or mitigating',act.length,'')}${kpi(act.some(r=>r.due_date&&r.due_date<today)?'r':'g','⏰','Past due date',act.filter(r=>r.due_date&&r.due_date<today).length,'')}</div>
+    <div class="card fld" style="padding:10px 12px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <input placeholder="Search risks…" value="${esc(f.q)}" onchange="RISK_F.q=this.value;go('risks')" style="flex:1;min-width:160px;width:auto">
+      <select style="width:auto" ${set('client')}>${opt('all','All clients',f.client)}${cl.map(c=>opt(c,homeClient(c),f.client)).join('')}</select>
+      <select style="width:auto" ${set('job')}>${opt('all','All jobs',f.job)}${jobsF.map(j=>opt(j.id,j.job_ref,f.job)).join('')}</select>
+      <select style="width:auto" ${set('level')}>${opt('all','All levels',f.level)}${RISK_LEVELS.map(l=>opt(l[0],l[0],f.level)).join('')}</select>
+      <select style="width:auto" ${set('owner')}>${opt('all','All owners',f.owner)}${opt('me','Mine',f.owner)}${owners.map(o=>opt(o,qOwnerName(o),f.owner)).join('')}</select>
+      <select style="width:auto" ${set('status')}>${opt('active','Open and mitigating',f.status)}${opt('open','Open',f.status)}${opt('mitigating','Mitigating',f.status)}${opt('closed','Closed',f.status)}${opt('all','All',f.status)}</select></div>
+    <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Risk</th><th>Client / job</th><th>Level</th><th>Owner</th><th>Mitigation</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>
+    ${list.map(r=>{ const j=r.job_id?homeJob(r.job_id):null, st=RISK_ST[r.risk_status]||[r.risk_status,'grey'], late=r.due_date&&r.due_date<today&&r.risk_status!=='closed';
+      return `<tr${r.risk_status==='closed'?' style="opacity:.6"':''}><td><b>${esc(r.title||'')}</b>${r.description?`<div class="muted" style="font-size:11.5px">${esc(String(r.description).slice(0,120))}</div>`:''}${r.shared_with_client?'<div><span class="chip cyan" style="font-size:10px">Shown to client</span></div>':''}</td>
+        <td>${esc(homeClient(r.client_id))}${j?`<div class="muted" style="font-size:11.5px">${esc(j.job_ref)}</div>`:''}</td><td>${riskLvlChip(r.risk_level)}</td>
+        <td>${esc(r.owner_id?qOwnerName(r.owner_id):(r.owner||'—'))}</td><td style="font-size:12.5px;max-width:240px">${esc(String(r.mitigation||'').slice(0,140))||'<span class="muted">—</span>'}</td>
+        <td style="white-space:nowrap;${late?'color:var(--red);font-weight:700':''}">${r.due_date?jobDate(r.due_date):'—'}</td>
+        <td><span class="chip ${st[1]}">${esc(st[0])}</span>${r.risk_status==='closed'&&r.close_note?`<div class="muted" style="font-size:11px">${esc(String(r.close_note).slice(0,80))}</div>`:''}</td>
+        <td style="text-align:right"><button class="btn-ghost" style="padding:4px 9px" onclick="riskForm('${r.id}')">Edit</button></td></tr>`; }).join('')
+      || '<tr><td colspan="8" class="muted" style="padding:12px">No risks match.</td></tr>'}</tbody></table></div>`;
+}
+function riskForm(id){
+  const r=id?HOME.allRisks.find(x=>x.id===id):{risk_level:'Medium', risk_status:'open', owner_id:PROFILE.id, client_id:RISK_F.client!=='all'?RISK_F.client:(CLIENT&&CLIENT.id)};
+  const jobs=cid=>(JOBREG||[]).filter(j=>j.client_id===cid && !j.archived_at);
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:640px"><div class="modal-h"><h3>${id?'Edit risk':'Add risk'}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div class="frow"><div class="fld"><label>Client <span class="req">*</span></label><select id="rk_client" ${id?'disabled':''} onchange="el('rk_job').innerHTML='<option value=&quot;&quot;>— not linked to a job —</option>'+(JOBREG||[]).filter(j=>j.client_id===this.value&&!j.archived_at).map(j=>'<option value=&quot;'+j.id+'&quot;>'+esc(j.job_ref+' · '+(j.title||''))+'</option>').join('')">
+          <option value="">— choose —</option>${activeClients().map(c=>`<option value="${c.id}" ${c.id===r.client_id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
+        <div class="fld"><label>Job</label><select id="rk_job"><option value="">— not linked to a job —</option>${jobs(r.client_id).map(j=>`<option value="${j.id}" ${j.id===r.job_id?'selected':''}>${esc(j.job_ref+' · '+(j.title||''))}</option>`).join('')}</select></div></div>
+      <div class="fld"><label>Risk <span class="req">*</span></label><input id="rk_title" value="${esc(r.title||'')}" placeholder="e.g. Crane access not confirmed"></div>
+      <div class="fld"><label>Description</label><textarea id="rk_desc" rows="2">${esc(r.description||'')}</textarea></div>
+      <div class="frow"><div class="fld"><label>Level</label><select id="rk_level">${RISK_LEVELS.map(l=>`<option ${l[0]===r.risk_level?'selected':''}>${l[0]}</option>`).join('')}</select></div>
+        <div class="fld"><label>Owner</label><select id="rk_owner">${qOwnerOptions(r.owner_id)}</select></div>
+        <div class="fld"><label>Due date</label><input id="rk_due" type="date" value="${esc(String(r.due_date||'').slice(0,10))}"></div></div>
+      <div class="fld"><label>Mitigation</label><textarea id="rk_mit" rows="2" placeholder="What is being done about it">${esc(r.mitigation||'')}</textarea></div>
+      <div class="frow"><div class="fld"><label>Status</label><select id="rk_status" onchange="el('rk_closew').style.display=this.value==='closed'?'':'none'">${Object.entries(RISK_ST).map(([k,v])=>`<option value="${k}" ${k===r.risk_status?'selected':''}>${v[0]}</option>`).join('')}</select></div>
+        <div class="fld"><label>&nbsp;</label><label style="display:flex;gap:7px;align-items:center;font-size:13px"><input type="checkbox" id="rk_share" style="width:auto" ${r.shared_with_client?'checked':''}> Show to the client</label></div></div>
+      <div class="fld" id="rk_closew" style="display:${r.risk_status==='closed'?'':'none'}"><label>How was it closed? <span class="req">*</span></label><input id="rk_note" value="${esc(r.close_note||'')}"></div>
+    </div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="rkSave" onclick="riskSave(${id?`'${id}'`:'null'})">${id?'Save':'Add risk'}</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function riskSave(id){
+  const v=k=>{ const e=el(k); return e?e.value.trim():''; };
+  const row={job_id:v('rk_job')||null, title:v('rk_title'), description:v('rk_desc')||null, risk_level:v('rk_level'), owner_id:v('rk_owner')||null,
+    owner:(v('rk_owner')?qOwnerName(v('rk_owner')):null), due_date:v('rk_due')||null, mitigation:v('rk_mit')||null, risk_status:v('rk_status'),
+    close_note:v('rk_status')==='closed'?(v('rk_note')||null):null, shared_with_client:el('rk_share').checked};
+  if(!id){ row.client_id=v('rk_client'); if(!row.client_id) return msg('Choose the client.','err'); }
+  if(!row.title) return msg('Describe the risk.','err');
+  if(row.risk_status==='closed' && !row.close_note) return msg('Add a note saying how it was closed.','err');
+  el('rkSave').disabled=true;
+  const r=id?await sb.from('risks').update(row).eq('id',id).select():await sb.from('risks').insert(row).select();
+  if(r.error||!r.data||!r.data.length){ el('rkSave').disabled=false; return msg('Not saved: '+(r.error?r.error.message:'no permission'),'err'); }
+  closeForm(); HOME.allRisks=null; const o=await sb.from('risks').select('*').neq('risk_status','closed'); HOME.risks=o.data||HOME.risks; go('risks');
 }
 </script>
 </body>
