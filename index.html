@@ -4978,7 +4978,7 @@ async function ntfRemove(id){
 }
 
 /* Pages that still show the client picked in the side menu (release 9) */
-const CLIENT_SCOPED_PAGES=['sites','schedule','rota','teams','callouts','shifts','installs','gallery','project','documents','notify','quotes','requests','reports','analytics','overview','completed','checkins'];
+const CLIENT_SCOPED_PAGES=['sites','schedule','rota','teams','callouts','shifts','installs','gallery','project','documents','notify','quotes','requests','reports','overview','completed','checkins'];
 const TITLES={hq:'HQ — Business Overview',digest:'Daily Digest',clients:'Clients',jobs:'Job Status — Mobilisation Control',completed:'Completed Works',crm:'Pipeline',pipeline:'Pipeline',command:'Command Centre',checkins:'Site Check-ins',engineers:'Engineers',personrec:'Engineer',compliance:'Compliance — Expiries & Right to Work',overview:'Programme Overview',sites:'Progress',schedule:'Schedule',rota:'Shift Rota',teams:'Site Team Profiles',installs:'Install Reports',risks:'Risk Register',callouts:'Call-Out Reports',shifts:'Shift Reports',reports:'Activity Feed',gallery:'Photo Evidence',analytics:'Analytics & Insights',documents:'Documents',notify:'Email Updates',project:'Project Plan',requests:'Work Requests',quotes:'Quote Requests',quality:'Quality & Handover',suppliers:'Suppliers — Labour Partners',finance:'Profit & Margins',sup_home:'Dashboard',sup_engineers:'Engineers',sup_jobs:'Bookings',sup_timesheets:'Timesheets',sup_feedback:'Performance & Feedback',sup_docs:'Compliance & Documents'};
 function go(page){
   CURRENT=page;
@@ -5029,7 +5029,7 @@ function go(page){
     else if(page==='quotes')html=pageQuotes();
     else if(page==='qrequests')html=pageQuoteRequests();
     else if(page==='suppinv')html=pageSupplierInvoices();
-    else if(page==='analytics')html=pageAnalytics();
+    else if(page==='analytics')html=(PROFILE.role==='admin'&&VIEW!=='client'?pageAnalytics2():pageAnalytics());
     else if(page==='documents'||(page==='project'&&PROFILE.role!=='engineer'))html=(PROFILE.role==='engineer'?pageDocuments():pageDocs());
     else if(page==='notify')html=pageNotify();
     else if(page==='project')html=pageProjectPlan();
@@ -7215,7 +7215,7 @@ const COMPLETION_CHECKS=[
 const JOB_COMPLETED=['ready_to_invoice','invoiced','closed'];
 
 function billChip(s){ const x=BILL_STATUS.find(r=>r[0]===s)||[s,s,'grey']; return `<span class="chip ${x[2]}">${x[1]}</span>`; }
-function billType(t){ return (BILL_TYPES.find(x=>x[0]===t)||[t,t])[1]; }
+function billType(t){ return t==='hours'?'Hours and costs':(BILL_TYPES.find(x=>x[0]===t)||[t,t])[1]; }
 function billErr(e){ const m=(e&&e.message)||String(e);
   if(/job_billing_xero_no_unique/.test(m)) return 'That Xero invoice number has already been recorded for this company.';
   return poFriendlyError(e); }
@@ -7244,12 +7244,13 @@ async function jobLoadBilling(j){
     if(x.status==='planned' && (x.stage_type!=='final'||done)) b.push(`<button class="btn-ghost" style="padding:4px 8px" onclick="billSetStatus('${x.id}','ready')">Mark ready</button>`);
     if(x.status==='ready') b.push(`<button class="btn-ghost" style="padding:4px 8px" onclick="billSetStatus('${x.id}','planned')">Not yet</button>`);
     if(['planned','ready'].includes(x.status) && (x.stage_type!=='final'||done)) b.push(`<button class="btn" style="padding:4px 10px" onclick="billInvoiceForm('${x.id}')">Record Xero invoice</button>`);
-    if(['planned','ready'].includes(x.status)) b.push(`<button class="btn-ghost" style="padding:4px 8px" onclick="billEditForm('${x.id}')">Edit</button><button class="btn-ghost" style="padding:4px 8px;color:var(--red)" onclick="billCancel('${x.id}')">Cancel</button>`);
+    if(['planned','ready'].includes(x.status)) b.push(`${x.stage_type==='hours'?'':`<button class="btn-ghost" style="padding:4px 8px" onclick="billEditForm('${x.id}')">Edit</button>`}<button class="btn-ghost" style="padding:4px 8px;color:var(--red)" onclick="billCancel('${x.id}')">Cancel</button>`);
     if(x.status==='invoiced') b.push(`<button class="btn-ghost" style="padding:4px 8px" onclick="billPayment('${x.id}')">Payment</button>`);
     return `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${b.join('')}</div>`; };
+  const linesBtn=x=>x.stage_type==='hours'?`<button class="edit-btn" style="margin-top:3px" onclick="hbLines('${x.id}')">Lines</button>`:'';
   const rows=BILL.stages.map(x=>`<tr style="${x.status==='cancelled'?'opacity:.55':''}"><td>${x.stage_seq}</td>
       <td><b>${esc(x.label)}</b><div class="muted" style="font-size:11.5px">${esc(billType(x.stage_type))}${x.planned_date?' · planned '+jobDate(x.planned_date):''}${x.cancel_reason?' · '+esc(x.cancel_reason):''}${x.note?' · '+esc(x.note):''}</div></td>
-      <td style="text-align:right">${m(x.amount)}</td><td>${billChip(x.status)}</td>
+      <td style="text-align:right">${m(x.amount)}${linesBtn(x)}</td><td>${billChip(x.status)}</td>
       <td>${x.status==='invoiced'?`<b>${esc(x.xero_invoice_no)}</b><div class="muted" style="font-size:11.5px">${jobDate(x.invoice_date)} · ${m(x.invoiced_amount)} · ${BILL_PAY[x.payment_status]||''}</div>`:''}</td>
       <td>${acts(x)}</td></tr>`).join('');
   let banner='';
@@ -7263,7 +7264,7 @@ async function jobLoadBilling(j){
       <button class="btn" onclick="openCompleteJob('${j.id}')">Complete job…</button></div>`;
   }
   const cell=(l,v,st)=>`<div style="min-width:120px"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em">${l}</div><div style="font-weight:700;font-size:14px${st?';'+st:''}">${v}</div></div>`;
-  box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="font-weight:700;flex:1">Billing</div>${can?`<button class="btn-ghost" onclick="billEditForm(null)">＋ Add billing stage</button>`:''}</div>
+  box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="font-weight:700;flex:1">Billing</div>${can?`<button class="btn-ghost" onclick="hbForm('${j.id}')">＋ Add stage from hours</button><button class="btn-ghost" onclick="billEditForm(null)">＋ Add billing stage</button>`:''}</div>
     ${banner}
     <div class="card" style="padding:8px 10px;overflow-x:auto">
       <div style="display:flex;flex-wrap:wrap;gap:12px 22px;padding:4px 4px 10px">${cell('Revised value',m(BILL.revised))}${cell('Scheduled',m(scheduled),Math.abs(scheduled-BILL.revised)>0.005?'color:var(--amber)':'')}${cell('Invoiced',m(invoiced))}${cell('Left to invoice',m(BILL.revised-invoiced))}</div>
@@ -9948,6 +9949,253 @@ async function riskSave(id){
   const r=id?await sb.from('risks').update(row).eq('id',id).select():await sb.from('risks').insert(row).select();
   if(r.error||!r.data||!r.data.length){ el('rkSave').disabled=false; return msg('Not saved: '+(r.error?r.error.message:'no permission'),'err'); }
   closeForm(); HOME.allRisks=null; const o=await sb.from('risks').select('*').neq('risk_status','closed'); HOME.risks=o.data||HOME.risks; go('risks');
+}
+/* ===================================================================
+   COMMERCIAL, ANALYTICS & HOURLY BILLING  —  release 18 (build release 10).
+   Commercial with tabs (Overview, Quotes, Jobs & P&L, Invoicing) and the
+   new reports; office Analytics across clients with hours by job and
+   engineer and the monthly service report PDF; "Add stage from hours".
+   =================================================================== */
+
+/* ---------- Add stage from hours (job Billing tab) ---------- */
+let HB={job:null, prev:null};
+function hbForm(jobId){
+  const j=billJob()||(JOBREG||[]).find(x=>x.id===jobId); HB={job:j, prev:null};
+  billModal('hbModal','Add stage from hours',
+    `<div class="muted" style="font-size:12.5px;margin-bottom:10px">For hourly-rate work: <b>confirmed, chargeable</b> hours × ${esc(jobClientName(j.client_id))}’s rates (from the client’s Rates tab), a call-out fee per chargeable call-out, and optionally the job’s costs with an uplift. Anything already billed is left out, so nothing is billed twice.</div>
+     <div class="frow"><div class="fld"><label>Up to and including</label><input type="date" id="hb_to" value="${ymd(new Date())}" onchange="hbPreview()"></div>
+       <div class="fld"><label><input type="checkbox" id="hb_costs" style="width:auto" onchange="el('hb_upw').style.display=this.checked?'':'none';hbPreview()"> Include costs</label><div id="hb_upw" style="display:none"><input type="number" id="hb_up" value="15" min="0" step="0.5" onchange="hbPreview()" style="width:90px"> % uplift</div></div></div>
+     <div class="fld"><label>Stage name</label><input id="hb_label" placeholder="e.g. Hours and costs to ${jobDate(ymd(new Date()))}"></div>
+     <div id="hbPrev"><div class="muted">Working it out…</div></div>`,
+    `<button class="btn-ghost" onclick="el('hbModal').remove()">Cancel</button><button class="btn" id="hbSave" disabled onclick="hbSave()">Add billing stage</button>`, 760);
+  hbPreview();
+}
+async function hbPreview(){
+  const box=el('hbPrev'); if(!box) return;
+  const up=el('hb_costs').checked?Number(el('hb_up').value||0):null;
+  const r=await sb.rpc('hours_billing_preview',{p_job:HB.job.id, p_to:val('hb_to')||ymd(new Date()), p_cost_uplift:up});
+  if(r.error){ box.innerHTML=`<div class="note" style="border-left:3px solid var(--red);padding-left:10px">${esc(r.error.message)}</div>`; el('hbSave').disabled=true; return; }
+  const p=HB.prev=r.data, cur=p.currency, lines=p.lines||[];
+  const rates=[p.hourly_rate?`${jobMoney(p.hourly_rate,cur)}/h`:'<span style="color:var(--amber)">no hourly rate set</span>', p.callout_fee?`call-out fee ${jobMoney(p.callout_fee,cur)}`:'', p.ooh_uplift_pct?`out of hours +${Number(p.ooh_uplift_pct)}%`:'', p.weekend_uplift_pct?`weekend +${Number(p.weekend_uplift_pct)}%`:''].filter(Boolean).join(' · ');
+  const lab={labour:'Hours', callout:'Call-out', other_cost:'Cost', supplier_invoice_line:'Supplier invoice'};
+  box.innerHTML=`<div class="muted" style="font-size:12.5px;margin-bottom:6px">Rates: ${rates}</div>
+    <div style="max-height:300px;overflow:auto"><table class="tbl"><thead><tr><th>Date</th><th>What</th><th>Line</th><th style="text-align:right">Amount</th></tr></thead><tbody>
+    ${lines.map(l=>`<tr><td style="white-space:nowrap">${jobDate(l.date)}</td><td>${lab[l.item_type]||l.item_type}</td><td style="font-size:12.5px">${esc(l.description||'')}</td><td style="text-align:right">${jobMoney(l.amount,cur)}</td></tr>`).join('')
+      || '<tr><td colspan="4" class="muted" style="padding:10px">Nothing to bill: no confirmed, chargeable hours, call-outs or costs that haven’t already been billed.</td></tr>'}</tbody></table></div>
+    <div style="text-align:right;font-weight:800;margin-top:8px">Total (net): ${jobMoney(p.total,cur)}</div>`;
+  el('hbSave').disabled=!(lines.length && Number(p.total));
+}
+async function hbSave(){
+  el('hbSave').disabled=true;
+  const up=el('hb_costs').checked?Number(el('hb_up').value||0):null;
+  const r=await sb.rpc('add_hours_stage',{p_job:HB.job.id, p_to:val('hb_to')||ymd(new Date()), p_cost_uplift:up, p_label:val('hb_label')||null});
+  if(r.error){ el('hbSave').disabled=false; return billSay('hbModal',billErr(r.error)); }
+  el('hbModal').remove(); billRefresh();
+}
+async function hbLines(stageId){
+  const s=(BILL.stages||[]).find(x=>x.id===stageId), cur=(billJob()||{}).currency;
+  const r=await sb.from('billing_stage_items').select('*').eq('stage_id',stageId).order('item_date');
+  const rows=r.data||[];
+  billModal('hbLinesModal',`${esc(s?s.label:'Billing stage')} — lines`,
+    rows.length?`<div style="max-height:420px;overflow:auto"><table class="tbl"><thead><tr><th>Date</th><th>Line</th><th style="text-align:right">Qty</th><th style="text-align:right">Amount</th></tr></thead><tbody>${rows.map(x=>`<tr><td style="white-space:nowrap">${jobDate(x.item_date)}</td><td style="font-size:12.5px">${esc(x.description||'')}</td><td style="text-align:right">${x.quantity??''}</td><td style="text-align:right">${jobMoney(x.amount,cur)}</td></tr>`).join('')}</tbody></table></div>
+      <div style="text-align:right;font-weight:800;margin-top:8px">${jobMoney(rows.reduce((a,x)=>a+Number(x.amount),0),cur)}</div>
+      <div class="muted" style="font-size:12px;margin-top:6px">These hours and costs are locked to this stage. Cancelling the stage frees them to bill again.</div>`
+      :'<div class="muted">No lines (the stage was cancelled, which freed them).</div>',
+    `<button class="btn-ghost" onclick="el('hbLinesModal').remove()">Close</button>`, 720);
+}
+
+/* ---------- Commercial with tabs ---------- */
+let COMM_TAB='overview';
+if(typeof loadCommercial==='function'){
+  const _lc=loadCommercial;
+  loadCommercial=async function(){ await _lc.apply(this,arguments);
+    if(!COMM || !jobCan('quotes.view')) return;
+    try{ const q=await jobFetchAll(()=>sb.from('quotes').select('id,quote_ref,lead_ref,title,client_id,entity_code,currency,status,total_sell,valid_until,job_id,archived_at,created_at,issued_at,accepted_at,converted_at,updated_at,lost_reason,project_owner'));
+      COMM.q=q; }catch(e){ console.warn(e); }
+    try{ if(jobCan('margins.view')){ const c=await jobFetchAll(()=>sb.from('job_completions').select('*').is('reopened_at',null)); COMM.comp=c; } }catch(e){ COMM.comp=[]; }
+    if(CURRENT==='commercial') go('commercial');
+  };
+}
+if(typeof pageCommercial==='function'){
+  const _pc=pageCommercial;
+  pageCommercial=function(){
+    const base=_pc();
+    if(!COMM || COMM_ERR || PROFILE.role!=='admin' || !jobCan('margins.view')) return base;
+    const tabs=[['overview','Overview'],['quotes','Quotes'],['jobs','Jobs & P&L'],['invoicing','Invoicing']];
+    const bar=`<div class="jtabs" style="margin:0 0 12px">${tabs.map(([k,l])=>`<button class="jtab ${COMM_TAB===k?'on':''}" onclick="COMM_TAB='${k}';go('commercial')">${l}</button>`).join('')}</div>`;
+    const cut=base.indexOf('<div class="grid kpis"');
+    const head=cut>0?base.slice(0,cut):'', body=cut>0?base.slice(cut):base;
+    if(COMM_TAB==='overview') return head+bar+body;
+    return head+bar+(COMM_TAB==='quotes'?commQuotesHtml():COMM_TAB==='jobs'?commJobsHtml():commInvoicingHtml());
+  };
+}
+function commSec(t,sub,body){ return `<div class="card" style="padding:12px 14px;margin-bottom:14px"><div style="font-weight:700">${t}</div>${sub?`<div class="muted" style="font-size:12px;margin-bottom:8px">${sub}</div>`:'<div style="height:8px"></div>'}${body}</div>`; }
+function commQuotesHtml(){
+  const Q=COMM.q.filter(q=>!q.archived_at && commIn(q,'created_at'));
+  const won=Q.filter(q=>q.job_id||q.status==='accepted'), lost=Q.filter(q=>q.status==='rejected'), decided=won.length+lost.length;
+  const days=won.filter(q=>q.issued_at&&(q.accepted_at||q.converted_at)).map(q=>(new Date(q.accepted_at||q.converted_at)-new Date(q.issued_at))/86400000);
+  const avg=days.length?Math.round(days.reduce((a,b)=>a+b,0)/days.length):null;
+  const grp=(keyFn,labelFn)=>{ const by={}; Q.filter(q=>q.status!=='lead').forEach(q=>{ const k=keyFn(q)||'—'; (by[k]=by[k]||[]).push(q); });
+    return Object.keys(by).sort().map(k=>{ const l=by[k], w=l.filter(q=>q.job_id||q.status==='accepted'), x=l.filter(q=>q.status==='rejected');
+      return `<tr><td>${esc(labelFn(k))}</td><td style="text-align:right">${l.filter(q=>q.issued_at).length}</td><td style="text-align:right">${w.length}</td><td style="text-align:right">${x.length}</td>
+        <td style="text-align:right">${w.length+x.length?Math.round(w.length/(w.length+x.length)*100)+'%':'—'}</td><td style="text-align:right">${sumByCur(w,'total_sell')}</td><td style="text-align:right">${sumByCur(x,'total_sell')}</td></tr>`; }).join(''); };
+  const th='<thead><tr><th></th><th style="text-align:right">Issued</th><th style="text-align:right">Won</th><th style="text-align:right">Lost</th><th style="text-align:right">Win rate</th><th style="text-align:right">Value won</th><th style="text-align:right">Value lost</th></tr></thead>';
+  const reasons={}; lost.forEach(q=>{ const r=(typeof LOST_REASONS!=='undefined'?(LOST_REASONS.find(x=>x[0]===q.lost_reason)||[])[1]:null)||q.lost_reason||'Not given'; reasons[r]=(reasons[r]||0)+1; });
+  const mk=q=>String(q.issued_at||q.created_at).slice(0,7);
+  return `<div class="grid kpis" style="margin-bottom:14px">
+      ${kpi('','🎯','Win rate',decided?Math.round(won.length/decided*100)+'%':'—',`${won.length} won · ${lost.length} lost`)}
+      <div class="card kpi"><div class="spark">🏆</div><div class="lbl">Value won</div><div class="val" style="font-size:18px">${sumByCur(won,'total_sell')}</div></div>
+      <div class="card kpi"><div class="spark">✖</div><div class="lbl">Value lost</div><div class="val" style="font-size:18px">${sumByCur(lost,'total_sell')}</div></div>
+      ${kpi('','⏳','Issue to acceptance',avg!=null?avg+' days':'—','average')}</div>
+    ${commSec('By month','Quotes by the month they were issued',`<table class="tbl">${th}<tbody>${grp(mk,k=>k==='—'?'Not issued':new Date(k+'-01T12:00:00').toLocaleDateString('en-GB',{month:'short',year:'numeric'}))}</tbody></table>`)}
+    ${commSec('By client','',`<table class="tbl">${th}<tbody>${grp(q=>q.client_id,jobClientName)}</tbody></table>`)}
+    ${commSec('By Project Owner / Manager','',`<table class="tbl">${th}<tbody>${grp(q=>q.project_owner,k=>k==='—'?'Not set':qOwnerName(k))}</tbody></table>`)}
+    ${commSec('Why quotes were lost','',Object.keys(reasons).length?Object.entries(reasons).sort((a,b)=>b[1]-a[1]).map(([r,n])=>`<div style="display:flex;gap:10px;align-items:center;margin:4px 0"><div style="width:220px">${esc(r)}</div><div style="flex:1;background:var(--panel2);border-radius:6px;height:12px"><div style="width:${Math.round(n/lost.length*100)}%;background:var(--red);height:12px;border-radius:6px"></div></div><b style="width:30px;text-align:right">${n}</b></div>`).join(''):'<div class="muted">No lost quotes in this range.</div>')}`;
+}
+function commJobsHtml(){
+  const pnl=COMM.pnl.filter(p=>!p.archived_at && p.status!=='cancelled').map(p=>({...p, created_at:((COMM.jobs.find(j=>j.id===p.job_id))||{}).created_at})).filter(p=>commIn(p,'created_at'));
+  const byC={}; pnl.forEach(p=>{ (byC[p.client_id]=byC[p.client_id]||[]).push(p); });
+  const comp=(COMM.comp||[]); const done=pnl.filter(p=>['ready_to_invoice','invoiced','closed'].includes(p.status));
+  const fm=p=>{ const c=comp.find(x=>x.job_id===p.job_id); return c?Number(c.final_margin):(p.forecast_margin!=null?Number(p.forecast_margin):null); };
+  return commSec('Profit by client','Value, forecast gross profit and margin per client (jobs created in the date range)',
+      `<table class="tbl"><thead><tr><th>Client</th><th style="text-align:right">Jobs</th><th style="text-align:right">Value</th><th style="text-align:right">Forecast GP</th><th style="text-align:right">Margin</th></tr></thead><tbody>${
+        Object.keys(byC).sort((a,b)=>jobClientName(a).localeCompare(jobClientName(b))).map(c=>{ const l=byC[c], v=l.reduce((a,p)=>a+Number(p.revised_value||0),0), g=l.reduce((a,p)=>a+Number(p.forecast_gp||0),0);
+          return `<tr><td>${esc(jobClientName(c))}</td><td style="text-align:right">${l.length}</td><td style="text-align:right">${sumByCur(l,'revised_value')}</td><td style="text-align:right;${g<0?'color:var(--red)':''}">${sumByCur(l,'forecast_gp')}</td><td style="text-align:right">${v?(g/v*100).toFixed(1)+'%':'—'}</td></tr>`; }).join('')||'<tr><td colspan="5" class="muted">No jobs.</td></tr>'}</tbody></table>`)
+    +commSec('Completed jobs review','Final margin against quoted margin, to spot over- and under-runs',
+      `<table class="tbl"><thead><tr><th>Job</th><th>Client</th><th style="text-align:right">Value</th><th style="text-align:right">Quoted margin</th><th style="text-align:right">Final margin</th><th style="text-align:right">Difference</th></tr></thead><tbody>${
+        done.map(p=>{ const f=fm(p), q=p.quoted_margin!=null?Number(p.quoted_margin):null, d=f!=null&&q!=null?f-q:null;
+          return `<tr><td><b>${esc(p.job_ref)}</b><div class="muted" style="font-size:11.5px">${esc(p.title||'')}</div></td><td>${esc(jobClientName(p.client_id))}</td><td style="text-align:right">${jobMoney(p.revised_value,p.currency)}</td>
+            <td style="text-align:right">${pct(q)}</td><td style="text-align:right">${pct(f)}</td><td style="text-align:right;font-weight:700;color:${d==null?'inherit':d<-0.02?'var(--red)':d>0.02?'var(--green)':'inherit'}">${d==null?'—':(d>0?'+':'')+(d*100).toFixed(1)+' pts'}</td></tr>`; }).join('')
+        ||'<tr><td colspan="6" class="muted">No completed jobs in this range.</td></tr>'}</tbody></table>`);
+}
+function commInvoicingHtml(){
+  const jobs={}; COMM.jobs.forEach(j=>jobs[j.id]=j);
+  const pnl={}; COMM.pnl.forEach(p=>pnl[p.job_id]=p);
+  const inv=(COMM.bill||[]).filter(b=>b.status==='invoiced' && b.invoice_date).filter(b=>{ const j=jobs[b.job_id]||{}; return (COMM_F.entity==='all'||j.entity_code===COMM_F.entity)&&(COMM_F.client==='all'||j.client_id===COMM_F.client); });
+  const months=[...Array(12)].map((_,i)=>{ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-11+i); return ymd(d).slice(0,7); });
+  const cur=b=>(jobs[b.job_id]||{}).currency||'GBP';
+  const rows=months.map(m=>{ const l=inv.filter(b=>String(b.invoice_date).slice(0,7)===m);
+    const gp=l.map(b=>({currency:cur(b), v:Number(b.invoiced_amount||0)*Number((pnl[b.job_id]||{}).forecast_margin||0)}));
+    return {m, l, inv:sumByCur(l.map(b=>({...b,currency:cur(b)})),'invoiced_amount'), gp:sumByCur(gp,'v'), n:l.length}; });
+  const unpaid=(COMM.bill||[]).filter(b=>b.status==='invoiced' && b.payment_status!=='paid').map(b=>({...b,currency:cur(b)}));
+  setTimeout(commInvChart,60);
+  return commSec('Month by month','Invoiced value and gross profit (invoiced × the job’s forecast margin), last 12 months',
+      `<div style="height:220px;margin-bottom:10px"><canvas id="commInvChart"></canvas></div>
+       <table class="tbl"><thead><tr><th>Month</th><th style="text-align:right">Invoices</th><th style="text-align:right">Invoiced</th><th style="text-align:right">Gross profit</th></tr></thead><tbody>${rows.slice().reverse().map(r=>`<tr><td>${new Date(r.m+'-01T12:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'})}</td><td style="text-align:right">${r.n||'—'}</td><td style="text-align:right">${r.n?r.inv:'—'}</td><td style="text-align:right">${r.n?r.gp:'—'}</td></tr>`).join('')}</tbody></table>`)
+    +commSec('Invoiced, not yet paid','',`<table class="tbl"><thead><tr><th>Job</th><th>Invoice</th><th style="text-align:right">Amount</th><th>Status</th></tr></thead><tbody>${unpaid.map(b=>`<tr><td><b>${esc((jobs[b.job_id]||{}).job_ref||'')}</b><div class="muted" style="font-size:11.5px">${esc(jobClientName((jobs[b.job_id]||{}).client_id))}</div></td><td>${esc(b.xero_invoice_no||'')} · ${jobDate(b.invoice_date)}</td><td style="text-align:right">${jobMoney(b.invoiced_amount,b.currency)}</td><td>${esc(BILL_PAY[b.payment_status]||'')}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">Everything invoiced has been paid.</td></tr>'}</tbody></table>`);
+}
+function commInvChart(){
+  const c=el('commInvChart'); if(!c||typeof Chart==='undefined') return;
+  const jobs={}; COMM.jobs.forEach(j=>jobs[j.id]=j); const pnl={}; COMM.pnl.forEach(p=>pnl[p.job_id]=p);
+  const months=[...Array(12)].map((_,i)=>{ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-11+i); return ymd(d).slice(0,7); });
+  const inv=(COMM.bill||[]).filter(b=>b.status==='invoiced'&&b.invoice_date);
+  const sum=(m,f)=>inv.filter(b=>String(b.invoice_date).slice(0,7)===m).reduce((a,b)=>a+f(b),0);
+  try{ charts.comm=new Chart(c,{type:'bar',data:{labels:months.map(m=>new Date(m+'-01T12:00:00').toLocaleDateString('en-GB',{month:'short'})),datasets:[
+    {label:'Invoiced',data:months.map(m=>sum(m,b=>Number(b.invoiced_amount||0))),backgroundColor:'#38bdf8',borderRadius:5},
+    {label:'Gross profit',data:months.map(m=>sum(m,b=>Number(b.invoiced_amount||0)*Number((pnl[b.job_id]||{}).forecast_margin||0))),backgroundColor:'#22c55e',borderRadius:5}]},
+    options:{maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}}},scales:{y:{beginAtZero:true},x:{grid:{display:false}}}}}); }catch(e){}
+}
+
+/* ---------- Analytics (office): all clients, date range, job filter ---------- */
+let AN={f:null, data:null, key:'', err:null};
+function anDefaults(){ const d=new Date(); return {from:ymd(new Date(d.getFullYear(),d.getMonth(),1)), to:ymd(d), client:'all', job:'all'}; }
+async function anLoad(){
+  const f=AN.f, k=JSON.stringify(f); AN.key=k; AN.data=null; AN.err=null;
+  try{
+    await clPerms(); if(jobCan('jobs.view') && JOBREG===null) await loadJobRegister();
+    const rng=(x,col)=>{ x=x.gte(col,f.from).lte(col,f.to+(col==='submitted_at'?'T23:59:59':'')); if(f.client!=='all') x=x.eq('client_id',f.client); if(f.job!=='all') x=x.eq('job_id',f.job); return x; };
+    const [co,sh,pr]=await Promise.all([
+      jobFetchAll(()=>rng(sb.from('callout_reports').select('id,client_id,job_id,site_id,site_name,priority,status,submitted_at,call_date,on_site_time,completed_time,fault_description,engineer,chargeable'),'submitted_at')),
+      jobFetchAll(()=>rng(sb.from('shift_reports').select('id,client_id,job_id,engineer,hours_worked,submitted_at,shift_date'),'submitted_at')),
+      jobFetchAll(()=>rng(sb.from('progress_reports').select('id,client_id,job_id,engineer,progress_pct,plan_flag,discipline,submitted_at,report_date'),'submitted_at'))]);
+    let hours=[], src='labour';
+    if(jobCan('cost_rates.view')){
+      let jobIds=null; if(f.client!=='all'||f.job!=='all') jobIds=(JOBREG||[]).filter(j=>(f.client==='all'||j.client_id===f.client)&&(f.job==='all'||j.id===f.job)).map(j=>j.id);
+      if(!jobIds||jobIds.length) hours=await jobFetchAll(()=>{ let x=sb.from('labour_entries').select('job_id,worker_id,work_date,hours,ot_hours,status,chargeable').neq('status','void').gte('work_date',f.from).lte('work_date',f.to); if(jobIds) x=x.in('job_id',jobIds); return x; });
+    } else { src='reports'; hours=await jobFetchAll(()=>{ let x=sb.from('report_hours').select('job_id,worker_id,work_date,hours,ot_hours,client_id').gte('work_date',f.from).lte('work_date',f.to); if(f.client!=='all') x=x.eq('client_id',f.client); if(f.job!=='all') x=x.eq('job_id',f.job); return x; }); }
+    const wids=[...new Set(hours.map(h=>h.worker_id))]; let workers=[];
+    if(wids.length){ const w=await sb.rpc('report_people'); workers=w.data||[]; }
+    if(AN.key!==k) return;
+    AN.data={co,sh,pr,hours,src,workers};
+  }catch(e){ AN.err=e.message||String(e); AN.data={co:[],sh:[],pr:[],hours:[],workers:[]}; }
+  if(CURRENT==='analytics') go('analytics');
+}
+function anSet(k,v){ AN.f[k]=v; if(k==='client') AN.f.job='all'; anLoad(); go('analytics'); }
+function pageAnalytics2(){
+  if(!AN.f) AN.f=anDefaults();
+  if(AN.key!==JSON.stringify(AN.f)) { anLoad(); }
+  const f=AN.f, opt=(v,l,c)=>`<option value="${esc(v)}" ${v===c?'selected':''}>${esc(l)}</option>`;
+  const jobs=(JOBREG||[]).filter(j=>f.client==='all'||j.client_id===f.client);
+  const bar=`<div class="card fld" style="padding:10px 12px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+    <label style="font-size:12.5px">From <input type="date" style="width:auto" value="${f.from}" onchange="anSet('from',this.value)"></label>
+    <label style="font-size:12.5px">To <input type="date" style="width:auto" value="${f.to}" onchange="anSet('to',this.value)"></label>
+    <select style="width:auto" onchange="anSet('client',this.value)">${opt('all','All clients',f.client)}${activeClients().map(c=>opt(c.id,c.name,f.client)).join('')}</select>
+    <select style="width:auto" onchange="anSet('job',this.value)">${opt('all','All jobs',f.job)}${jobs.map(j=>opt(j.id,j.job_ref+' · '+(j.title||''),f.job)).join('')}</select>
+    <span style="flex:1"></span>${f.client!=='all'?`<button class="addbtn" onclick="anServicePdf()">⬇ Monthly service report (PDF)</button>`:'<span class="muted" style="font-size:12px">Pick a client for the monthly service report</span>'}</div>`;
+  const head=`<div class="sechead"><h3>📊 Analytics</h3><span class="sub">Office only · ${jobDate(f.from)} – ${jobDate(f.to)}</span><span class="line"></span></div>`;
+  if(!AN.data) return head+bar+emptyState('⏳','Working it out…','One moment.');
+  const d=AN.data, jref=id=>{ const j=(JOBREG||[]).find(x=>x.id===id); return j?j.job_ref+' · '+(j.title||''):'No job'; };
+  const wname=id=>(d.workers.find(w=>w.id===id)||{}).name||'Unknown';
+  const tot=d.hours.reduce((a,h)=>a+Number(h.hours||0)+Number(h.ot_hours||0),0);
+  const byJob={}, byEng={}; d.hours.forEach(h=>{ const n=Number(h.hours||0)+Number(h.ot_hours||0); byJob[h.job_id||'']=(byJob[h.job_id||'']||0)+n; byEng[h.worker_id]=(byEng[h.worker_id]||0)+n; });
+  const done=d.co.filter(r=>r.completed_time), within=done.filter(r=>(new Date(r.completed_time)-new Date(r.submitted_at))/3600000<=(SLA_HOURS[r.priority]||48)).length;
+  const resp=d.co.filter(r=>r.on_site_time).map(r=>(new Date(r.on_site_time)-new Date(r.submitted_at))/3600000).filter(x=>x>=0);
+  const pri={}; d.co.forEach(r=>{ pri[r.priority||'Unspecified']=(pri[r.priority||'Unspecified']||0)+1; });
+  setTimeout(anCharts,60);
+  return head+bar+(AN.err?`<div class="note" style="margin-bottom:10px">Some figures could not load: ${esc(AN.err)}</div>`:'')+
+    `<div class="grid kpis" style="margin-bottom:14px">${kpi('c','🔧','Call-outs',d.co.length,'')}${kpi('','🗓','Shift reports',d.sh.length,'')}${kpi('','🔩','Install reports',d.pr.length,'')}
+      ${kpi('g','⏰','Hours worked',Math.round(tot*10)/10,d.src==='labour'?'from job labour':'from reports')}${kpi(done.length&&within<done.length?'a':'g','🎯','SLA met',done.length?Math.round(within/done.length*100)+'%':'—',`${within}/${done.length} completed`)}
+      ${kpi('','🚐','Average response',resp.length?(resp.reduce((a,b)=>a+b,0)/resp.length).toFixed(1)+'h':'—','to on site')}</div>
+    <div class="row2"><div class="card"><h4>⏰ Hours by job</h4><table class="tbl"><tbody>${Object.entries(byJob).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${esc(jref(k))}</td><td style="text-align:right"><b>${Math.round(v*10)/10}</b></td></tr>`).join('')||'<tr><td class="muted">No hours in this range.</td></tr>'}</tbody></table></div>
+      <div class="card"><h4>👷 Hours by engineer</h4><canvas id="anEng" height="${Math.max(120,Object.keys(byEng).length*26)}"></canvas></div></div>
+    <div class="row2" style="margin-top:16px"><div class="card"><h4>📈 Call-outs by week</h4><canvas id="anWeeks" height="200"></canvas></div>
+      <div class="card"><h4>🥧 Call-outs by priority</h4><table class="tbl"><tbody>${Object.entries(pri).map(([k,v])=>`<tr><td>${esc(k)}</td><td style="text-align:right"><b>${v}</b></td></tr>`).join('')||'<tr><td class="muted">No call-outs.</td></tr>'}</tbody></table></div></div>`;
+}
+function anCharts(){
+  if(!AN.data||typeof Chart==='undefined') return; const d=AN.data;
+  const wname=id=>(d.workers.find(w=>w.id===id)||{}).name||'Unknown';
+  const byEng={}; d.hours.forEach(h=>{ byEng[h.worker_id]=(byEng[h.worker_id]||0)+Number(h.hours||0)+Number(h.ot_hours||0); });
+  const e=Object.entries(byEng).sort((a,b)=>b[1]-a[1]).slice(0,20);
+  try{ if(el('anEng')&&e.length) charts.anEng=new Chart(el('anEng'),{type:'bar',data:{labels:e.map(x=>wname(x[0])),datasets:[{data:e.map(x=>Math.round(x[1]*10)/10),backgroundColor:'#38bdf8',borderRadius:5}]},options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{beginAtZero:true},y:{grid:{display:false}}}}}); }catch(x){}
+  const wk=r=>ymd(homeWeek(String(r.submitted_at).slice(0,10)+'T12:00:00'));
+  const by={}; d.co.forEach(r=>{ by[wk(r)]=(by[wk(r)]||0)+1; }); const ks=Object.keys(by).sort();
+  try{ if(el('anWeeks')&&ks.length) charts.anWeeks=new Chart(el('anWeeks'),{type:'bar',data:{labels:ks.map(k=>jobDate(k)),datasets:[{data:ks.map(k=>by[k]),backgroundColor:'#a78bfa',borderRadius:5}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0}},x:{grid:{display:false}}}}}); }catch(x){}
+}
+/* the monthly service report for a client review (no money) */
+async function anServicePdf(){
+  if(!window.jspdf){ alert('PDF tool still loading — try again in a moment.'); return; }
+  const f=AN.f, d=AN.data; if(!d||f.client==='all') return;
+  const c=(CLIENTS||[]).find(x=>x.id===f.client)||{name:''};
+  const cj=await sb.rpc('client_jobs',{p_client:f.client}); const jobs=cj.data||[];
+  const jref=id=>{ const j=jobs.find(x=>x.id===id); return j?j.job_ref:'—'; };
+  const wname=id=>(d.workers.find(w=>w.id===id)||{}).name||'Unknown';
+  const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'pt',format:'a4'}); const W=595,H=842,L=40,R=W-40; let y;
+  doc.setFillColor(10,14,22); doc.rect(0,0,W,120,'F'); try{ doc.addImage(MLOGO,'PNG',L,26,64,64); }catch(e){}
+  doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(20); doc.text('Service Report',L+80,58);
+  doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(180,200,220); doc.text(`${c.name}  ·  ${jobDate(f.from)} – ${jobDate(f.to)}${f.job!=='all'?'  ·  '+jref(f.job):''}`,L+80,80);
+  doc.setFontSize(9); doc.text('Mercury Automated Solutions  ·  generated '+new Date().toLocaleDateString('en-GB'),L+80,98);
+  y=150;
+  const H2=t=>{ if(y>H-120){ doc.addPage(); y=50; } doc.setFont('helvetica','bold'); doc.setTextColor(15,32,51); doc.setFontSize(13); doc.text(t,L,y); doc.setDrawColor(225,235,243); doc.line(L,y+7,R,y+7); y+=24; };
+  const line=(a,b)=>{ if(y>H-60){ doc.addPage(); y=50; } doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(15,32,51); doc.text(String(a).slice(0,80),L,y); if(b!=null) doc.text(String(b),R,y,{align:'right'}); y+=15; };
+  const done=d.co.filter(r=>r.completed_time), within=done.filter(r=>(new Date(r.completed_time)-new Date(r.submitted_at))/3600000<=(SLA_HOURS[r.priority]||48)).length;
+  const resp=d.co.filter(r=>r.on_site_time).map(r=>(new Date(r.on_site_time)-new Date(r.submitted_at))/3600000).filter(x=>x>=0);
+  const tot=d.hours.reduce((a,h)=>a+Number(h.hours||0)+Number(h.ot_hours||0),0);
+  H2('Summary');
+  [['Call-outs',d.co.length],['  of which Priority 1',d.co.filter(r=>r.priority==='Priority 1').length],['Completed within SLA',done.length?`${within} of ${done.length} (${Math.round(within/done.length*100)}%)`:'—'],
+   ['Average response to on site',resp.length?(resp.reduce((a,b)=>a+b,0)/resp.length).toFixed(1)+' hours':'—'],['Shift reports',d.sh.length],['Install reports',d.pr.length],['Hours worked',Math.round(tot*10)/10]].forEach(r=>line(r[0],r[1]));
+  y+=8; H2('Jobs');
+  jobs.filter(j=>d.hours.some(h=>h.job_id===j.id)||d.co.some(r=>r.job_id===j.id)||d.sh.some(r=>r.job_id===j.id)||d.pr.some(r=>r.job_id===j.id)).forEach(j=>{
+    const h=d.hours.filter(x=>x.job_id===j.id).reduce((a,x)=>a+Number(x.hours||0)+Number(x.ot_hours||0),0);
+    line(`${j.job_ref}  ${j.title||''}${j.site_name?' — '+j.site_name:''}`, `${Math.round(Number(j.progress_pct||0))}% · ${Math.round(h*10)/10}h`); });
+  y+=8; H2('Hours by engineer');
+  const byE={}; d.hours.forEach(h=>{ byE[h.worker_id]=(byE[h.worker_id]||0)+Number(h.hours||0)+Number(h.ot_hours||0); });
+  Object.entries(byE).sort((a,b)=>b[1]-a[1]).forEach(([w,n])=>line(wname(w),Math.round(n*10)/10+'h'));
+  if(!Object.keys(byE).length) line('No hours recorded in this period.');
+  y+=8; H2('Call-outs');
+  d.co.slice().sort((a,b)=>String(a.submitted_at).localeCompare(String(b.submitted_at))).forEach(r=>line(`${jobDate(String(r.call_date||r.submitted_at).slice(0,10))}  ${r.priority||''}  ${r.site_name||''}  ${textOnly(r.fault_description||'')}`, r.status||''));
+  if(!d.co.length) line('No call-outs in this period.');
+  doc.setFontSize(8); doc.setTextColor(150,160,175); doc.text('Times are from report submission. Hours are from the job labour records.',L,H-26);
+  doc.save(`Service-report-${String(c.name).replace(/[^a-z0-9]+/gi,'_')}-${f.from.slice(0,7)}.pdf`);
 }
 </script>
 </body>
