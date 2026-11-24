@@ -775,10 +775,11 @@ function renderShell(){
   const supplierNav = isSupplier ? `
       ${nl('🚚 '+esc(supName))}
       <button class="nav-btn active" data-page="sup_home"><span class="ic">🏠</span> Dashboard</button>
-      ${nb('sup_jobs','🗓','Bookings')}
-      ${nb('sup_timesheets','⏱','Timesheets')}
-      ${nb('sup_engineers','👷','Engineers')}
-      ${nb('sup_docs','📁','Compliance &amp; Documents')}` : '';
+      ${nb('sup_pos','🧾','Purchase Orders')}
+      ${SUPPLIER&&SUPPLIER.supplier_type==='labour_agency'?nb('sup_jobs','🗓','Bookings')+nb('sup_timesheets','⏱','Timesheets'):''}
+      ${SUPPLIER&&['labour_agency','subcontractor'].includes(SUPPLIER.supplier_type)?nb('sup_engineers','👷','Engineers'):''}
+      ${nb('sup_docs','📁','Compliance &amp; Documents')}
+      ${nb('sup_company','🏢','Company details')}` : '';
   /* Client portal menu (also what Mercury staff see in "View as client") */
   const clientNav = (isClient && !isSupplier) ? `
       ${nl('Programme')}
@@ -4415,6 +4416,7 @@ function openAssign(supplierId, engId, rec){
     <div class="modal-h"><h3>${editId?'Edit allocation':'Assign labour to a job'}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
     <div class="modal-b">
       <div class="fld"><label>Engineer</label><select id="a_eng" onchange="const e=(SDATA.engineers||[]).find(x=>x.id===this.value); if(e&&el('a_rate')&&!el('a_rate').value){const c=resolveRates(e).cost; if(c!=null) el('a_rate').value=c;} updateAssignComp(this.value);"><option value="">— To be filled by the supplier —</option>${engs.map(e=>`<option value="${e.id}" ${engId===e.id?'selected':''}>${esc(e.full_name)}${e.trade?' — '+esc(e.trade):''}</option>`).join('')}</select><div id="a_comp">${compBadge(engId)}</div><div class="note" style="font-size:11px;margin-top:3px">Leave as “to be filled” to send it to the supplier as an open job they staff.</div></div>
+      <div class="fld"><label>Job <span class="req">*</span></label><select id="a_job" onchange="supAssignJob(this.value)"><option value="">— choose the job —</option>${supJobOptions(r.job_id)}</select></div>
       <div class="fld"><label>Job title</label><input id="a_title" value="${esc(r.title||'')}" placeholder="e.g. Conveyor install — nights"></div>
       <div class="frow">
         <div class="fld"><label>Client</label><select id="a_client" onchange="const s=el('a_site'); if(s) s.innerHTML=supSites(this.value)"><option value="">— select client —</option>${(CLIENTS||[]).map(c=>`<option value="${c.id}" ${r.client_id===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
@@ -4439,10 +4441,12 @@ function openAssign(supplierId, engId, rec){
 }
 async function submitAssign(supplierId, editId){
   const engId=val('a_eng')||null;   // optional — blank means "supplier to fill"
+  const jobId=val('a_job')||null;
+  if(!jobId && !editId) return msg('Choose the job this booking is for.','err');
   if(engId && !complianceGateOk(engId, supEngName(engId))) return;   // gate on tickets/right-to-work
   const btn=el('asgSave'); btn.disabled=true; btn.textContent='Saving…'; msg('','');
   const title=val('a_title')||null;
-  const row={ supplier_id:supplierId, engineer_id:engId, client_id:val('a_client')||null, site_id:val('a_site')||null, site_label:val('a_loc')||null, title:title, start_date:val('a_start')||null, end_date:val('a_end')||null, shift:val('a_shift')||null, charge_rate:num('a_rate') };
+  const row={ supplier_id:supplierId, engineer_id:engId, client_id:val('a_client')||null, site_id:val('a_site')||null, site_label:val('a_loc')||null, title:title, start_date:val('a_start')||null, end_date:val('a_end')||null, shift:val('a_shift')||null, charge_rate:num('a_rate') }; if(jobId) row.job_id=jobId;
   let error;
   if(editId){ row.status=val('a_status')||'Booked'; const rr=await sb.from('supplier_assignments').update(row).eq('id',editId); error=rr.error; }
   else { row.status='Booked'; const rr=await sb.from('supplier_assignments').insert(row); error=rr.error; }
@@ -4511,8 +4515,8 @@ async function submitRate(supplierId, engId){
   if(error){ btn.disabled=false; btn.textContent='⭐ Save rating'; msg('Could not save: '+error.message,'err'); return; }
   msg('✓ Rating saved.','ok'); await loadSuppliers(); setTimeout(()=>{ closeForm(); openSupManage(supplierId); }, 700);
 }
-async function approveTimesheet(id){ const {error}=await sb.from('supplier_timesheets').update({status:'Approved'}).eq('id',id); if(error){ alert('Could not approve: '+error.message); return; } await supRefresh('suppliers'); }
-async function rejectTimesheet(id){ const note=prompt('Reason for rejection (optional):')||null; const {error}=await sb.from('supplier_timesheets').update({status:'Rejected',approver_note:note}).eq('id',id); if(error){ alert('Could not reject: '+error.message); return; } await supRefresh('suppliers'); }
+async function approveTimesheet(id){ const {error}=await sb.from('supplier_timesheets').update({status:'Approved'}).eq('id',id); if(error){ alert('Could not approve: '+error.message); return; } await supRefresh(CURRENT==='suprec'?'suprec':'suppliers'); }
+async function rejectTimesheet(id){ const note=prompt('Reason for rejection (optional):')||null; const {error}=await sb.from('supplier_timesheets').update({status:'Rejected',approver_note:note}).eq('id',id); if(error){ alert('Could not reject: '+error.message); return; } await supRefresh(CURRENT==='suprec'?'suprec':'suppliers'); }
 
 /* ---------- SUPPLIER PORTAL ---------- */
 function pageSupHome(){
@@ -4994,14 +4998,17 @@ function go(page){
     else if(page==='engineers')html=pagePeople();
     else if(page==='personrec')html=pagePersonRec();
     else if(page==='compliance')html=pageCompliance();
-    else if(page==='suppliers')html=pageSuppliers();
+    else if(page==='suppliers')html=pageSuppliers2();
+    else if(page==='suprec')html=pageSupRec();
+    else if(page==='sup_pos')html=pageSupPOs();
+    else if(page==='sup_company')html=pageSupCompany();
     else if(page==='finance')html=pageFinance();
-    else if(page==='sup_home')html=pageSupHome();
+    else if(page==='sup_home')html=pageSupHome2();
     else if(page==='sup_engineers')html=pageSupEngineers();
-    else if(page==='sup_jobs')html=pageSupJobs();
+    else if(page==='sup_jobs')html=pageSupBookings();
     else if(page==='sup_timesheets')html=pageSupTimesheets();
     else if(page==='sup_feedback')html=pageSupFeedback();
-    else if(page==='sup_docs')html=pageSupDocs();
+    else if(page==='sup_docs')html=pageSupCompliance();
     else if(page==='clients')html=pageClients();
     else if(page==='jobs')html=pageJobs();
     else if(page==='completed')html=pageCompleted();
@@ -6065,7 +6072,7 @@ let PEDIT=null;   // {p, lines, invoices}
 TITLES.poreg='Purchase orders';
 
 const PO_STATUSES=[['draft','Draft','grey'],['open','Open','cyan'],['part_invoiced','Part invoiced','amber'],['completed','Completed','green'],['cancelled','Cancelled','red']];
-const SUPPLIER_TYPES=[['materials','Materials'],['plant_hire','Plant hire'],['subcontractor','Subcontractor'],['labour_agency','Labour agency'],['other','Other']];
+const SUPPLIER_TYPES=[['materials','Materials'],['plant_hire','Plant hire'],['subcontractor','Subcontractor'],['labour_agency','Labour agency'],['services','Services'],['other','Other']];
 const OTHER_SOURCES=[['company_card','Company card'],['expense','Expense claim'],['other','Other']];
 
 function poStatusChip(s){ const x=PO_STATUSES.find(r=>r[0]===s)||[s,s,'grey']; return `<span class="chip ${x[2]}">${esc(x[1])}</span>`; }
@@ -6241,7 +6248,7 @@ function renderPOModal(){
         <div class="fld"><label>Job <span class="req">*</span></label>${isNew
           ? `<select id="pe_job" onchange="poJobChanged()"><option value="">— choose —</option>${openJobs.map(x=>`<option value="${x.id}" ${x.id===p.job_id?'selected':''}>${esc(x.job_ref+' · '+x.title)} (${esc(jobClientName(x.client_id))})</option>`).join('')}</select>`
           : `<input value="${esc((j.job_ref||'')+' · '+(j.title||''))}" disabled>`}</div>
-        <div class="fld"><label>Supplier <span class="req">*</span></label><div style="display:flex;gap:6px"><select id="pe_sup" ${dis} style="flex:1"><option value="">— choose —</option>${SUPPLIERS_ALL.map(s=>`<option value="${s.id}" ${s.id===p.supplier_id?'selected':''}>${esc(s.name)} · ${esc((SUPPLIER_TYPES.find(t=>t[0]===s.supplier_type)||[,''])[1])}</option>`).join('')}</select>${ed?`<button class="btn-ghost" style="white-space:nowrap" onclick="poNewSupplier()">＋ New</button>`:''}</div></div>
+        <div class="fld"><label>Supplier <span class="req">*</span></label><div style="display:flex;gap:6px"><select id="pe_sup" ${dis} style="flex:1"><option value="">— choose —</option>${SUPPLIERS_ALL.filter(s=>!s.archived_at||s.id===p.supplier_id).map(s=>`<option value="${s.id}" ${s.id===p.supplier_id?'selected':''}>${esc(s.name)} · ${esc((SUPPLIER_TYPES.find(t=>t[0]===s.supplier_type)||[,''])[1])}</option>`).join('')}</select>${ed?`<button class="btn-ghost" style="white-space:nowrap" onclick="poNewSupplier()">＋ New</button>`:''}</div></div>
       </div>
       <div class="frow">
         <div class="fld"><label>What is being ordered <span class="req">*</span></label><input id="pe_desc" ${dis} value="${esc(p.description||'')}" placeholder="e.g. Steel beams for line 3"></div>
@@ -10197,6 +10204,412 @@ async function anServicePdf(){
   doc.setFontSize(8); doc.setTextColor(150,160,175); doc.text('Times are from report submission. Hours are from the job labour records.',L,H-26);
   doc.save(`Service-report-${String(c.name).replace(/[^a-z0-9]+/gi,'_')}-${f.from.slice(0,7)}.pdf`);
 }
+/* ===================================================================
+   SUPPLIERS  —  release 19 (build release 11).
+   Office: supplier list (types, compliance, open POs, spend) and record
+   page; bookings against jobs; invoice check. Supplier portal by type:
+   action dashboard, Purchase Orders, Bookings, Compliance & Documents,
+   Company details.
+   =================================================================== */
+
+const SUP_TYPES2=[['labour_agency','Labour agency'],['subcontractor','Subcontractor'],['materials','Materials'],['plant_hire','Plant hire'],['services','Services'],['other','Other']];
+const SUP_DOC_MATCH={public_liability:/public\s*liab|\bpl\b/i, employers_liability:/employ/i, avetta_chas:/avetta|chas/i, iso:/\biso\b/i, loler:/loler|inspect/i, rams:/\brams\b|risk\s*assess/i, method_statement:/method/i};
+let SUPX=null, SUPX_LOADING=false, SUP_F={type:'all', comp:'all', status:'current', q:''}, SREC={id:null, tab:'details'};
+TITLES.suprec='Supplier'; TITLES.sup_pos='Purchase Orders'; TITLES.sup_company='Company details'; TITLES.suppliers='Suppliers';
+function supTypeName(t){ return (SUP_TYPES2.find(x=>x[0]===t)||[t,t||'—'])[1]; }
+function supIsLabour(s){ return s && ['labour_agency','subcontractor'].includes(s.supplier_type); }
+
+/* ---------- compliance by type ---------- */
+function supCompliance(s, docs, req, jobsWithPO){
+  const mine=(docs||[]).filter(d=>d.supplier_id===s.id);
+  const today=ymd(new Date()), soon=ymd(new Date(Date.now()+30*86400000));
+  const best=(code, jobId)=>{ const m=mine.filter(d=>(d.doc_type===code || (!(req||[]).some(r=>r.doc_type===d.doc_type) && SUP_DOC_MATCH[code] && SUP_DOC_MATCH[code].test((d.doc_type||'')+' '+(d.label||'')))) && (jobId?d.job_id===jobId:true));
+    return m.sort((a,b)=>String(b.expiry||'9999').localeCompare(String(a.expiry||'9999')))[0]||null; };
+  const st=d=>!d?'missing':!d.expiry?'ok':d.expiry<today?'expired':d.expiry<=soon?'expiring':'ok';
+  const items=[];
+  (req||[]).filter(r=>r.supplier_type===s.supplier_type).sort((a,b)=>a.sort_order-b.sort_order).forEach(r=>{
+    if(r.per_job){ (jobsWithPO||[]).forEach(j=>{ const d=best(r.doc_type,j.id); items.push({req:r, label:`${r.label} — ${j.job_ref}`, job:j, doc:d, state:st(d)}); }); }
+    else { const d=best(r.doc_type); items.push({req:r, label:r.label, doc:d, state:st(d)}); } });
+  const rag=items.some(i=>['missing','expired'].includes(i.state))?'red':items.some(i=>i.state==='expiring')?'amber':'green';
+  return {items, rag};
+}
+const SUP_STATE={ok:['In date','green'], expiring:['Expiring','amber'], expired:['Expired','red'], missing:['Missing','red']};
+function supStateChip(s){ const x=SUP_STATE[s]||[s,'grey']; return `<span class="chip ${x[1]}">${x[0]}</span>`; }
+function supRagChip(r){ return r==='red'?'<span class="rag rag-red"></span> Action needed':r==='amber'?'<span class="rag rag-amber"></span> Expiring':'<span class="rag rag-green"></span> OK'; }
+
+/* ---------- office data ---------- */
+async function supxLoad(){
+  if(SUPX_LOADING) return; SUPX_LOADING=true;
+  try{
+    await clPerms(); await loadSuppliers();
+    if(jobCan('jobs.view') && JOBREG===null) await loadJobRegister();
+    const y0=new Date().getFullYear()+'-01-01';
+    const [req, pos, inv, chg] = await Promise.all([
+      sb.from('supplier_required_docs').select('*').order('sort_order').then(r=>r.data||[]),
+      jobCan('po.view')?jobFetchAll(()=>sb.from('purchase_orders').select('id,po_ref,job_id,supplier_id,status,total,invoiced,currency,required_by,issued_at,created_at,supplier_ack_at,supplier_delivery_date,supplier_reply,on_hire_date,off_hire_date,off_hire_requested_for')):Promise.resolve([]),
+      jobCan('po.view')?jobFetchAll(()=>sb.from('supplier_invoices').select('id,supplier_id,po_id,invoice_no,invoice_date,net_amount,status').neq('status','void').gte('invoice_date',y0)):Promise.resolve([]),
+      sb.from('supplier_change_requests').select('*').order('created_at',{ascending:false}).then(r=>r.data||[])]);
+    SUPX={req, pos, inv, chg};
+  }catch(e){ SUPX={req:[], pos:[], inv:[], chg:[], err:e.message}; }
+  SUPX_LOADING=false;
+  if(['suppliers','suprec'].includes(CURRENT)) go(CURRENT);
+}
+function supxReload(){ SUPX=null; supxLoad(); }
+function supJobsWithPO(sid){ const ids=[...new Set((SUPX.pos||[]).filter(p=>p.supplier_id===sid && ['open','part_invoiced'].includes(p.status)).map(p=>p.job_id))]; return ids.map(id=>(JOBREG||[]).find(j=>j.id===id)).filter(Boolean); }
+function supComp(s){ return supCompliance(s, SDATA.documents, SUPX.req, supJobsWithPO(s.id)); }
+function supSpend(sid){ const l=(SUPX.inv||[]).filter(i=>i.supplier_id===sid); return l.length?sumByCur(l.map(i=>({...i,currency:((SUPX.pos||[]).find(p=>p.id===i.po_id)||{}).currency||'GBP'})),'net_amount'):'—'; }
+
+/* ---------- office list ---------- */
+function pageSuppliers2(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','');
+  if(!SUPX){ supxLoad(); return emptyState('⏳','Loading suppliers…','One moment.'); }
+  const f=SUP_F, q=f.q.trim().toLowerCase();
+  const all=SUPPLIERS||[], cur=all.filter(s=>!s.archived_at);
+  const list=all.filter(s=>(f.status==='archived'?s.archived_at:f.status==='all'?true:!s.archived_at) && (f.type==='all'||s.supplier_type===f.type)
+    && (f.comp==='all'||supComp(s).rag===f.comp) && (!q||[s.name,s.contact_name,s.contact_email].some(v=>String(v||'').toLowerCase().includes(q))));
+  const openPO=sid=>(SUPX.pos||[]).filter(p=>p.supplier_id===sid && ['open','part_invoiced'].includes(p.status)).length;
+  const opt=(v,l,c)=>`<option value="${esc(v)}" ${v===c?'selected':''}>${esc(l)}</option>`;
+  const tsPend=(SDATA.timesheets||[]).filter(t=>t.status==='Submitted');
+  const chg=(SUPX.chg||[]).filter(c=>c.status==='open');
+  const set=k=>`onchange="SUP_F.${k}=this.value;go('suppliers')"`;
+  const supName=id=>{ const s=all.find(x=>x.id===id); return s?s.name:'—'; };
+  const engName=id=>{ const e=(SDATA.engineers||[]).find(x=>x.id===id); return e?e.full_name:'—'; };
+  return `<div class="sechead"><h3>🚚 Suppliers</h3><span class="sub">Labour agencies, subcontractors, materials, plant hire and services</span><span class="line"></span>
+      <button class="edit-btn" onclick="openRateCard()">💷 Rate card</button><button class="addbtn" onclick="supNewForm()">＋ Add supplier</button><button class="btn-ghost" onclick="supxReload()">Refresh</button></div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      ${kpi('','🚚','Suppliers',cur.length,'')}${kpi(cur.some(s=>supComp(s).rag==='red')?'r':'g','⚠','Compliance action needed',cur.filter(s=>supComp(s).rag==='red').length,'')}
+      ${kpi('','🧾','Open POs',(SUPX.pos||[]).filter(p=>['open','part_invoiced'].includes(p.status)).length,'')}${kpi(tsPend.length?'a':'','⏱','Timesheets to approve',tsPend.length,'')}</div>
+    <div class="card fld" style="padding:10px 12px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <input placeholder="Search supplier or contact…" value="${esc(f.q)}" onchange="SUP_F.q=this.value;go('suppliers')" style="flex:1;min-width:180px;width:auto">
+      <select style="width:auto" ${set('type')}>${opt('all','All types',f.type)}${SUP_TYPES2.map(t=>opt(t[0],t[1],f.type)).join('')}</select>
+      <select style="width:auto" ${set('comp')}>${opt('all','Any compliance',f.comp)}${opt('red','Action needed',f.comp)}${opt('amber','Expiring',f.comp)}${opt('green','OK',f.comp)}</select>
+      <select style="width:auto" ${set('status')}>${opt('current','Current',f.status)}${opt('archived','Archived',f.status)}${opt('all','Everything',f.status)}</select></div>
+    ${chg.length?`<div class="card" style="margin-bottom:12px;border-left:3px solid var(--amber)"><b>✉ ${chg.length} company-details change request${chg.length===1?'':'s'}</b> ${chg.map(c=>`<span class="chip amber" style="margin:2px;cursor:pointer" onclick="openSupplierRecord('${c.supplier_id}')">${esc(supName(c.supplier_id))}</span>`).join('')}</div>`:''}
+    <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Supplier</th><th>Type</th><th>Status</th><th>Compliance</th><th style="text-align:right">Open POs</th><th style="text-align:right">Spend this year</th><th>Login</th><th></th></tr></thead><tbody>
+    ${list.map(s=>{ const c=supComp(s), lg=(LOGINS||[]).filter(l=>l.supplier_id===s.id).length; return `<tr${s.archived_at?' style="opacity:.55"':''}><td><b>${esc(s.name)}</b>${s.contact_name?`<div class="muted" style="font-size:11.5px">${esc(s.contact_name)}</div>`:''}</td>
+      <td>${esc(supTypeName(s.supplier_type))}</td><td>${statusChip(s.archived_at?'Archived':s.status)}</td><td style="white-space:nowrap">${supRagChip(c.rag)}</td>
+      <td style="text-align:right">${openPO(s.id)||'—'}</td><td style="text-align:right">${supSpend(s.id)}</td><td>${lg?`<span class="chip green">${lg}</span>`:'<span class="muted">none</span>'}</td>
+      <td style="text-align:right"><button class="btn-ghost" style="padding:4px 10px" onclick="openSupplierRecord('${s.id}')">Open</button></td></tr>`; }).join('')||'<tr><td colspan="8" class="muted" style="padding:12px">No suppliers match.</td></tr>'}</tbody></table></div>
+    ${tsPend.length?`<div class="card" style="margin-top:14px;overflow-x:auto"><h4 style="margin:0 0 8px">⏱ Timesheets awaiting approval</h4><table class="tbl"><thead><tr><th>Date</th><th>Supplier</th><th>Engineer</th><th>Hours</th><th></th></tr></thead><tbody>
+      ${tsPend.map(t=>`<tr><td>${jobDate(t.work_date)}</td><td>${esc(supName(t.supplier_id))}</td><td>${esc(engName(t.engineer_id))}</td><td>${tsHours(t)} h</td><td style="white-space:nowrap"><button class="edit-btn" style="color:var(--green)" onclick="approveTimesheet('${t.id}')">✓ Approve</button> <button class="edit-btn" style="color:var(--red)" onclick="rejectTimesheet('${t.id}')">✕ Reject</button></td></tr>`).join('')}</tbody></table>
+      <div class="muted" style="font-size:12px;margin-top:6px">Approving a timesheet on a booking that has a job puts the hours onto that job’s labour, ready to confirm.</div></div>`:''}`;
+}
+function supNewForm(){
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:560px"><div class="modal-h"><h3>Add supplier</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b"><div class="fld"><label>Name <span class="req">*</span></label><input id="sn_name"></div>
+      <div class="frow"><div class="fld"><label>Type</label><select id="sn_type">${SUP_TYPES2.map(t=>`<option value="${t[0]}">${t[1]}</option>`).join('')}</select></div><div class="fld"><label>Contact name</label><input id="sn_cn"></div></div>
+      <div class="frow"><div class="fld"><label>Contact email</label><input id="sn_em" type="email"></div><div class="fld"><label>Phone</label><input id="sn_ph"></div></div></div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="snSave" onclick="supNewSave()">Add supplier</button></div><div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function supNewSave(){
+  const v=k=>el(k).value.trim(); if(!v('sn_name')) return msg('Enter the name.','err');
+  el('snSave').disabled=true;
+  const r=await sb.from('suppliers').insert({name:v('sn_name'), supplier_type:v('sn_type'), contact_name:v('sn_cn')||null, contact_email:v('sn_em')||null, contact_phone:v('sn_ph')||null, status:'Active'}).select().single();
+  if(r.error){ el('snSave').disabled=false; return msg('Not saved: '+r.error.message,'err'); }
+  closeForm(); await loadSuppliers(); openSupplierRecord(r.data.id);
+}
+
+/* ---------- office record page ---------- */
+function openSupplierRecord(id, tab){ SREC={id, tab:tab||'details'}; if(!SUPX){ supxLoad(); } go('suprec'); }
+function supRec(){ return (SUPPLIERS||[]).find(s=>s.id===SREC.id); }
+function supAfterChange(sid){ if(CURRENT==='suprec'){ closeForm(); go('suprec'); } else { closeForm(); openSupManage(sid); } }
+function supTab(t){ SREC.tab=t; go('suprec'); }
+function pageSupRec(){
+  if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','');
+  if(!SUPX){ supxLoad(); return emptyState('⏳','Loading…',''); }
+  const s=supRec(); if(!s) return emptyState('🚚','Supplier not found',`<button class="btn-ghost" onclick="go('suppliers')">Back</button>`);
+  const lab=supIsLabour(s), agency=s.supplier_type==='labour_agency';
+  const tabs=[['details','Details'],['docs','Documents & compliance'],['pos','POs & spend']]
+    .concat(lab?[['engineers','Engineers']]:[]).concat(agency?[['bookings','Bookings'],['rates','Rates'],['timesheets','Timesheets']]:[])
+    .concat([['ratings','Ratings'],['logins','Portal logins']]);
+  if(!tabs.some(t=>t[0]===SREC.tab)) SREC.tab='details';
+  const c=supComp(s);
+  let pane='';
+  try{ pane={details:supDetailsHtml, docs:supDocsHtml, pos:supPosHtml, engineers:supEngHtml, bookings:supBookHtml, rates:supRatesHtml, timesheets:supTsHtml, ratings:supRatingsHtml, logins:supLoginsHtml}[SREC.tab](s,c); }catch(e){ pane=`<div class="card">Could not draw this tab: ${esc(e.message)}</div>`; }
+  return `<div class="sechead"><button class="btn-ghost" style="padding:4px 10px" onclick="go('suppliers')">← Suppliers</button><h3 style="margin-left:6px">${esc(s.name)}</h3>
+      <span class="sub">${esc(supTypeName(s.supplier_type))} · ${statusChip(s.archived_at?'Archived':s.status)} · ${supRagChip(c.rag)}</span><span class="line"></span>
+      ${s.archived_at?'':`<button class="edit-btn" onclick="enterSupplierPreview('${s.id}')">👁 View as supplier</button>`}
+      ${s.archived_at?(jobCan('records.restore')?`<button class="btn-ghost" onclick="supRestore()">Restore</button>`:''):`<button class="btn-ghost" style="color:var(--red)" onclick="supArchive()">Archive</button>`}</div>
+    ${s.archived_at?`<div class="card" style="margin-bottom:12px"><b>Archived</b> — ${esc(s.archive_reason||'')}</div>`:''}
+    <div class="jtabs" style="margin-bottom:12px">${tabs.map(([k,l])=>`<button class="jtab ${SREC.tab===k?'on':''}" onclick="supTab('${k}')">${l}</button>`).join('')}</div>${pane}`;
+}
+function supDetailsHtml(s){
+  const f=(id,l,v,t)=>`<div class="fld"><label>${l}</label><input id="${id}" ${t?`type="${t}"`:''} value="${esc(v||'')}"></div>`;
+  const chg=(SUPX.chg||[]).filter(c=>c.supplier_id===s.id);
+  return `<div class="row2"><div class="card"><h4 style="margin:0 0 10px">Company</h4>
+      ${f('sd_name','Name',s.name)}
+      <div class="frow"><div class="fld"><label>Type</label><select id="sd_type">${SUP_TYPES2.map(t=>`<option value="${t[0]}" ${t[0]===s.supplier_type?'selected':''}>${t[1]}</option>`).join('')}</select></div>
+        <div class="fld"><label>Status</label><select id="sd_status">${['Active','On hold'].map(o=>`<option ${s.status===o?'selected':''}>${o}</option>`).join('')}</select></div></div>
+      <div class="fld"><label>Address</label><textarea id="sd_addr" rows="2">${esc(s.address||'')}</textarea></div>
+      <div class="frow">${f('sd_co','Company number',s.company_no)}${f('sd_vat','VAT number',s.vat_no)}</div>
+      <div class="frow">${f('sd_terms','Payment terms',s.payment_terms)}<div class="fld"><label>Currency</label><select id="sd_cur">${['GBP','EUR','USD'].map(c=>`<option ${c===(s.default_currency||'GBP')?'selected':''}>${c}</option>`).join('')}</select></div></div></div>
+    <div class="card"><h4 style="margin:0 0 10px">Contact</h4>${f('sd_cn','Contact name',s.contact_name)}<div class="frow">${f('sd_em','Email',s.contact_email,'email')}${f('sd_ph','Phone',s.contact_phone)}</div>
+      <div class="fld"><label>Notes (internal)</label><textarea id="sd_notes" rows="3">${esc(s.notes||'')}</textarea></div>
+      ${chg.length?`<h4 style="margin:12px 0 6px">Change requests from the supplier</h4>${chg.map(c=>`<div class="litem"><div class="bd"><div class="t">${esc(c.request)}</div><div class="m">${jobDate(String(c.created_at).slice(0,10))} · ${c.status==='open'?'<span class="chip amber">Open</span>':'<span class="chip green">Done</span>'}</div></div>${c.status==='open'?`<button class="edit-btn" onclick="supChgDone('${c.id}')">Mark done</button>`:''}</div>`).join('')}`:''}</div></div>
+    ${s.archived_at?'':`<div style="display:flex;gap:10px;align-items:center;margin-top:12px"><button class="btn" id="sdSave" style="width:auto" onclick="supSaveDetails()">Save details</button><span class="savemsg" id="sdMsg"></span></div>`}`;
+}
+async function supSaveDetails(){
+  const v=k=>{ const e=el(k); return e?e.value.trim():''; };
+  const row={name:v('sd_name'), supplier_type:v('sd_type'), status:v('sd_status'), address:v('sd_addr')||null, company_no:v('sd_co')||null, vat_no:v('sd_vat')||null,
+    payment_terms:v('sd_terms')||null, default_currency:v('sd_cur')||'GBP', contact_name:v('sd_cn')||null, contact_email:v('sd_em')||null, contact_phone:v('sd_ph')||null, notes:v('sd_notes')||null};
+  if(!row.name) return clSay('sdMsg','Enter the name.','err');
+  const r=await sb.from('suppliers').update(row).eq('id',SREC.id).select();
+  if(r.error||!r.data||!r.data.length) return clSay('sdMsg','Not saved: '+(r.error?r.error.message:'no permission'),'err');
+  await loadSuppliers(); go('suprec'); setTimeout(()=>clSay('sdMsg','✓ Saved.','ok'),50);
+}
+async function supChgDone(id){ const r=await sb.from('supplier_change_requests').update({status:'done', done_at:new Date().toISOString(), done_by:PROFILE.id}).eq('id',id).select(); if(r.error) return alert(r.error.message); const c=SUPX.chg.find(x=>x.id===id); if(c) c.status='done'; go('suprec'); }
+async function supArchive(){
+  const s=supRec(); const why=prompt(`Archive ${s.name}? It drops out of the lists and the PO supplier picker; its history stays. Give a reason:`);
+  if(why===null) return; if(!why.trim()) return alert('A reason is needed.');
+  const r=await sb.from('suppliers').update({archived_at:new Date().toISOString(), archive_reason:why.trim()}).eq('id',s.id).select();
+  if(r.error) return alert('Not archived: '+r.error.message);
+  await loadSuppliers(); go('suprec');
+}
+async function supRestore(){ const r=await sb.from('suppliers').update({archived_at:null}).eq('id',SREC.id).select(); if(r.error) return alert('Not restored: '+r.error.message); await loadSuppliers(); go('suprec'); }
+/* Documents & compliance */
+function supDocsHtml(s,c){
+  const other=(SDATA.documents||[]).filter(d=>d.supplier_id===s.id && !c.items.some(i=>i.doc&&i.doc.id===d.id));
+  return `<div class="card" style="margin-bottom:12px"><h4 style="margin:0 0 4px">Required for ${esc(supTypeName(s.supplier_type).toLowerCase())}s</h4><div class="muted" style="font-size:12px;margin-bottom:8px">An expired insurance stops POs being issued (a Director can override).</div>
+    <table class="tbl"><thead><tr><th>Document</th><th>Status</th><th>Expiry</th><th>File</th><th></th></tr></thead><tbody>
+    ${c.items.map((i,k)=>`<tr><td><b>${esc(i.label)}</b>${i.doc&&i.doc.label!==i.label?`<div class="muted" style="font-size:11.5px">${esc(i.doc.label)}</div>`:''}</td><td>${supStateChip(i.state)}</td><td>${i.doc&&i.doc.expiry?jobDate(i.doc.expiry):'—'}</td>
+      <td>${i.doc&&i.doc.file_path?`<a href="${esc(i.doc.file_path)}" target="_blank">📄 View</a>`:''}</td><td style="text-align:right"><button class="edit-btn" onclick="supDocForm('${s.id}','${i.req.doc_type}','${i.job?i.job.id:''}','${jss(i.label)}')">${i.doc?'Replace':'Upload'}</button></td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted">Nothing required for this type.</td></tr>'}</tbody></table></div>
+    <div class="card"><div style="display:flex;align-items:center"><h4 style="margin:0;flex:1">Other documents</h4><button class="edit-btn" onclick="supDocForm('${s.id}','other','','')">＋ Add</button></div>
+    <table class="tbl"><tbody>${other.map(d=>`<tr><td>${esc(d.label)}</td><td>${esc(d.doc_type||'')}</td><td>${d.expiry?`<span class="chip ${cardStatus(d.expiry).c}">${jobDate(d.expiry)}</span>`:''}</td><td>${d.file_path?`<a href="${esc(d.file_path)}" target="_blank">📄 View</a>`:''}</td></tr>`).join('')||'<tr><td class="muted">None.</td></tr>'}</tbody></table></div>`;
+}
+function supDocForm(sid, code, jobId, label){
+  const req=(SUPX&&SUPX.req||[]).filter(r=>r.doc_type===code)[0];
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:520px"><div class="modal-h"><h3>${esc(label||'Add document')}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b"><div class="fld"><label>Document name <span class="req">*</span></label><input id="sdf_label" value="${esc(label||(req?req.label:''))}"></div>
+      <div class="fld"><label>Expiry</label><input id="sdf_exp" type="date"></div>
+      <div class="fld"><label>File (PDF or image)</label><input id="sdf_file" type="file" accept="image/*,application/pdf"></div></div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="sdfSave" onclick="supDocSave('${sid}','${code}','${jobId}')">Save</button></div><div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function supDocSave(sid, code, jobId){
+  const label=val('sdf_label'); if(!label) return msg('Give it a name.','err');
+  el('sdfSave').disabled=true; let url=null;
+  const f=el('sdf_file').files[0];
+  if(f){ const path=`supplier/${sid}/docs/${Date.now()}_${f.name.replace(/[^A-Za-z0-9._-]/g,'_')}`; const u=await sb.storage.from('evidence').upload(path,f,{upsert:false});
+    if(u.error){ el('sdfSave').disabled=false; return msg('Upload failed: '+u.error.message,'err'); } url=sb.storage.from('evidence').getPublicUrl(path).data.publicUrl; }
+  const r=await sb.from('supplier_documents').insert({supplier_id:sid, label, doc_type:code, expiry:val('sdf_exp')||null, file_path:url, job_id:jobId||null});
+  if(r.error){ el('sdfSave').disabled=false; return msg('Not saved: '+r.error.message,'err'); }
+  closeForm(); if(PROFILE.role==='admin' && !SUPPREVIEW){ await loadSuppliers(); go(CURRENT); } else await supRefresh('sup_docs');
+}
+/* POs & spend */
+function supPosHtml(s){
+  const pos=(SUPX.pos||[]).filter(p=>p.supplier_id===s.id).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+  const jr=id=>{ const j=(JOBREG||[]).find(x=>x.id===id); return j?j.job_ref:''; };
+  const plant=s.supplier_type==='plant_hire';
+  const byYear={}; (SUPX.inv||[]).filter(i=>i.supplier_id===s.id).forEach(i=>{ byYear[i.invoice_date.slice(0,4)]=(byYear[i.invoice_date.slice(0,4)]||0)+Number(i.net_amount||0); });
+  return `<div class="grid kpis" style="margin-bottom:12px">${kpi('','🧾','Open POs',pos.filter(p=>['open','part_invoiced'].includes(p.status)).length,'')}
+      <div class="card kpi"><div class="spark">💷</div><div class="lbl">Spend this year</div><div class="val" style="font-size:18px">${supSpend(s.id)}</div></div>
+      ${kpi('','📦','Still to be invoiced',sumByCur(pos.filter(p=>['open','part_invoiced'].includes(p.status)),p=>Math.max(Number(p.total)-Number(p.invoiced),0)),'')}</div>
+    <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>PO</th><th>Job</th><th>Status</th><th style="text-align:right">Total</th><th style="text-align:right">Invoiced</th><th>Required by</th><th>Supplier reply</th>${plant?'<th>Hire</th>':''}<th></th></tr></thead><tbody>
+    ${pos.map(p=>`<tr><td><b>${esc(p.po_ref||'Draft')}</b></td><td>${esc(jr(p.job_id))}</td><td>${esc(p.status)}</td><td style="text-align:right">${jobMoney(p.total,p.currency)}</td><td style="text-align:right">${jobMoney(p.invoiced,p.currency)}</td>
+      <td>${p.required_by?jobDate(p.required_by):'—'}</td><td style="font-size:12px">${p.supplier_ack_at?'✓ Acknowledged':''}${p.supplier_delivery_date?`<div>Delivery: ${jobDate(p.supplier_delivery_date)}</div>`:''}${p.supplier_reply?`<div class="muted">${esc(p.supplier_reply)}</div>`:''}</td>
+      ${plant?`<td style="font-size:12px">${p.on_hire_date?'On '+jobDate(p.on_hire_date):''}${p.off_hire_date?'<div>Off '+jobDate(p.off_hire_date)+'</div>':''}${p.off_hire_requested_for?`<div style="color:var(--amber)">Off-hire asked for ${jobDate(p.off_hire_requested_for)}</div>`:''}</td>`:''}
+      <td style="white-space:nowrap">${plant&&['open','part_invoiced'].includes(p.status)&&jobCan('po.create')?`<button class="edit-btn" onclick="supOffHire('${p.id}')">Request off-hire</button> `:''}<button class="edit-btn" onclick="openPO('${p.id}')">Open</button></td></tr>`).join('')||`<tr><td colspan="${plant?9:8}" class="muted">No POs yet.</td></tr>`}</tbody></table>
+    ${Object.keys(byYear).length?`<div class="muted" style="font-size:12px;margin-top:6px">Invoiced: ${Object.keys(byYear).sort().map(y=>`${y} ${jobMoney(byYear[y],s.default_currency||'GBP')}`).join(' · ')}</div>`:''}</div>`;
+}
+async function supOffHire(po){
+  const d=prompt('Off-hire date (YYYY-MM-DD):', ymd(new Date())); if(!d) return;
+  const r=await sb.rpc('request_off_hire',{p_po:po, p_date:d}); if(r.error) return alert('Not sent: '+r.error.message);
+  supxReload();
+}
+/* Engineers (agencies and subcontractors) */
+function supEngHtml(s){
+  const engs=(SDATA.engineers||[]).filter(e=>e.supplier_id===s.id).sort((a,b)=>String(a.full_name).localeCompare(String(b.full_name)));
+  const w=id=>((typeof PPL!=='undefined'&&PPL&&PPL.workers)||[]).find(x=>x.supplier_engineer_id===id);
+  return `<div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Light</th><th>Engineer</th><th>Trade</th><th>Right to work</th><th>Cards</th><th>Status</th><th></th></tr></thead><tbody>
+    ${engs.map(e=>{ const f=engFlagFor(e), ww=w(e.id); return `<tr><td>${flagDot(f)}</td><td><b>${esc(e.full_name)}</b></td><td>${esc(e.trade||'—')}</td>
+      <td><span class="chip ${e.rtw_status==='Verified'||e.rtw_status==='Checked'?'green':e.rtw_status==='Expired'?'red':'amber'}">${esc(e.rtw_status||'Not checked')}</span></td><td>${cardsView(e.cards)}</td><td>${statusChip(e.status)}</td>
+      <td style="white-space:nowrap">${ww?`<button class="edit-btn" onclick="openPersonRecord('${ww.id}','cards')">Record</button> `:''}<button class="edit-btn" onclick="openRate('${s.id}','${e.id}')">⭐ Rate</button> <button class="edit-btn" onclick="setEngStatus('${e.id}','${e.status==='Approved'?'Suspended':'Approved'}')">${e.status==='Approved'?'Suspend':'Approve'}</button></td></tr>`; }).join('')
+      ||'<tr><td colspan="7" class="muted">No engineers yet. The supplier adds them in their portal.</td></tr>'}</tbody></table>
+    <div class="muted" style="font-size:12px;margin-top:6px">Scans are on each person’s record; Mercury decides which are shared with clients. A red engineer can’t be booked without a Director override.</div></div>`;
+}
+function supBookHtml(s){
+  const a=(SDATA.assignments||[]).filter(x=>x.supplier_id===s.id).sort((x,y)=>String(y.start_date||'').localeCompare(String(x.start_date||'')));
+  const jr=id=>{ const j=(JOBREG||[]).find(x=>x.id===id); return j?j.job_ref:''; };
+  return `<div style="display:flex;margin-bottom:8px"><span style="flex:1"></span><button class="addbtn" onclick="openAssign('${s.id}')">＋ New booking</button></div>
+    <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Dates</th><th>Engineer</th><th>Job</th><th>Shift</th><th>Rate</th><th>Status</th><th></th></tr></thead><tbody>
+    ${a.map(x=>`<tr${x.status==='Cancelled'?' style="opacity:.55"':''}><td>${x.start_date?jobDate(x.start_date):'—'}${x.end_date?' → '+jobDate(x.end_date):''}</td><td>${x.engineer_id?esc(supEngName(x.engineer_id)):'<span class="chip amber">To fill</span>'}</td>
+      <td>${x.job_id?`<b>${esc(jr(x.job_id))}</b> `:'<span class="chip amber">No job</span> '}${esc(x.title||'')}</td><td>${esc(x.shift||'')}</td><td>${x.charge_rate!=null?gbp(x.charge_rate)+'/h':'—'}</td><td>${statusChip(x.status)}</td>
+      <td style="white-space:nowrap"><button class="edit-btn" onclick="openAssignEdit('${x.id}')">Edit</button>${['Booked','On site'].includes(x.status)?` <button class="edit-btn" style="color:var(--red)" onclick="cancelAssign('${x.id}')">Cancel</button>`:''}</td></tr>`).join('')||'<tr><td colspan="7" class="muted">No bookings yet.</td></tr>'}</tbody></table></div>`;
+}
+function supRatesHtml(s){
+  if(!jobCan('cost_rates.view')) return `<div class="card muted">Your staff role can’t see cost rates.</div>`;
+  if(WORKERS===null){ loadWorkers().then(()=>{ if(CURRENT==='suprec') go('suprec'); }); return `<div class="card muted">Loading…</div>`; }
+  const ws=WORKERS.filter(w=>w.supplier_id===s.id || (w.supplier_engineer_id && (SDATA.engineers||[]).some(e=>e.id===w.supplier_engineer_id && e.supplier_id===s.id)));
+  const cur=w=>WRATES.filter(r=>r.worker_id===w.id && !r.effective_to).sort((a,b)=>a.effective_from<b.effective_from?1:-1)[0];
+  return `<div class="card"><h4 style="margin:0 0 4px">Agency cost rates</h4><div class="muted" style="font-size:12px;margin-bottom:8px">What we pay per person (moved here from the rate card). Agreed charge rates on bookings are on the Bookings tab.</div>
+    <table class="tbl"><thead><tr><th>Person</th><th>Current rate</th><th>From</th><th></th></tr></thead><tbody>${ws.map(w=>{ const r=cur(w); return `<tr><td><b>${esc(w.full_name)}</b></td><td>${r?rateText(r):'<span class="muted">—</span>'}</td><td>${r?jobDate(r.effective_from):''}</td><td>${jobCan('cost_rates.edit')?`<button class="edit-btn" onclick="workerRates('${w.id}')">Rates</button>`:''}</td></tr>`; }).join('')||'<tr><td colspan="4" class="muted">No people linked to this supplier yet.</td></tr>'}</tbody></table></div>`;
+}
+function supTsHtml(s){
+  const t=(SDATA.timesheets||[]).filter(x=>x.supplier_id===s.id).sort((a,b)=>String(b.work_date).localeCompare(String(a.work_date)));
+  return `<div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Date</th><th>Engineer</th><th>Hours</th><th>Status</th><th></th></tr></thead><tbody>
+    ${t.map(x=>`<tr><td>${jobDate(x.work_date)}</td><td>${esc(supEngName(x.engineer_id))}</td><td>${tsHours(x)} h${x.hours_ot?` <span class="muted">(${x.hours_ot} OT)</span>`:''}</td><td>${statusChip(x.status)}</td>
+      <td style="white-space:nowrap">${x.status==='Submitted'?`<button class="edit-btn" style="color:var(--green)" onclick="approveTimesheet('${x.id}')">✓ Approve</button> <button class="edit-btn" style="color:var(--red)" onclick="rejectTimesheet('${x.id}')">✕ Reject</button>`:''}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">No timesheets.</td></tr>'}</tbody></table>
+    <div class="muted" style="font-size:12px;margin-top:6px">Approved hours on a booking with a job go onto the job’s labour as proposed entries.</div></div>`;
+}
+function supRatingsHtml(s){
+  const rs=(SDATA.ratings||[]).filter(r=>r.supplier_id===s.id).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+  return `<div class="card"><div class="muted" style="font-size:12px;margin-bottom:8px">Mercury only — ratings are no longer shown in the supplier’s portal.</div><table class="tbl"><thead><tr><th>Date</th><th>Engineer</th><th>Q / S / T / A</th><th>Flags</th><th>Comment</th></tr></thead><tbody>
+    ${rs.map(r=>`<tr><td>${jobDate(String(r.created_at).slice(0,10))}</td><td>${esc(supEngName(r.engineer_id))}</td><td>${[r.quality,r.safety,r.timekeeping,r.attitude].map(x=>x??'–').join(' / ')}</td><td>${r.no_show?'<span class="chip red">No-show</span>':''}${r.incident?'<span class="chip red">Incident</span>':''}</td><td style="font-size:12.5px">${esc(r.comment||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">No ratings yet.</td></tr>'}</tbody></table></div>`;
+}
+function supLoginsHtml(s){
+  const l=(LOGINS||[]).filter(x=>x.supplier_id===s.id);
+  return `<div class="card"><div style="display:flex;align-items:center;margin-bottom:8px"><h4 style="margin:0;flex:1">Portal logins</h4>${s.archived_at?'':`<button class="addbtn" onclick="openSupLinkLogin('${s.id}')">🔗 Link login</button>`}</div>
+    <table class="tbl"><tbody>${l.map(x=>`<tr><td>${esc(x.email||'')}</td><td>${esc(x.full_name||'')}</td></tr>`).join('')||'<tr><td class="muted">No logins yet. Create the user in Supabase → Authentication → Users, then link it here.</td></tr>'}</tbody></table></div>`;
+}
+
+/* ---------- invoice check on the PO invoice window ---------- */
+if(typeof poInvoiceForm==='function'){
+  const _pif=poInvoiceForm;
+  poInvoiceForm=function(){ const r=_pif.apply(this,arguments); setTimeout(supInvoiceCheck,60); return r; };
+}
+async function supInvoiceCheck(){
+  const box=el('invModal'); if(!box||!PEDIT||!PEDIT.p) return;
+  const s=(SUPPLIERS_ALL||SUPPLIERS||[]).find(x=>x.id===PEDIT.p.supplier_id); if(!s||!supIsLabour(s)) return;
+  const r=await sb.rpc('po_hours_check',{p_po:PEDIT.p.id}); const d=r.data; if(!d||!Number(d.timesheets)) return;
+  const b=box.querySelector('.modal-b')||box; const n=document.createElement('div'); n.className='note'; n.id='invHoursCheck'; n.style.cssText='border-left:3px solid var(--cyan);padding-left:10px;margin-bottom:10px';
+  n.innerHTML=`<b>Invoice check:</b> ${Number(d.timesheets)} approved timesheet${Number(d.timesheets)===1?'':'s'} on this job (${jobDate(d.from)} – ${jobDate(d.to)}): ${Number(d.hours)}h + ${Number(d.ot_hours)}h overtime × the agreed rates = <b>${jobMoney(d.value,PEDIT.p.currency)}</b>. Compare it with the invoice amount.`;
+  b.insertBefore(n,b.firstChild);
+}
+
+/* ---------- supplier portal ---------- */
+let SUPP={pos:null, bookings:null, req:null, tab:'upcoming'};
+async function suppLoad(){
+  const sid=SUPPLIER&&SUPPLIER.id; if(!sid) return;
+  try{
+    const asStaff=PROFILE.role==='admin';
+    if(asStaff && JOBREG===null && jobCan('jobs.view')) await loadJobRegister();
+    const [p,b,r]=await Promise.all([
+      asStaff?sb.from('purchase_orders').select('*, po_lines(*)').eq('supplier_id',sid).neq('status','draft').then(x=>({data:(x.data||[]).map(po=>{ const j=(JOBREG||[]).find(q=>q.id===po.job_id)||{}; return {...po, job_ref:j.job_ref, job_title:j.title, lines:(po.po_lines||[]).sort((a,b)=>a.sort_order-b.sort_order)}; })})):sb.rpc('supplier_pos'),
+      asStaff?Promise.resolve({data:(SDATA.assignments||[]).map(a=>({...a, job_ref:((JOBREG||[]).find(q=>q.id===a.job_id)||{}).job_ref}))}):sb.rpc('supplier_bookings'),
+      sb.from('supplier_required_docs').select('*').order('sort_order')]);
+    SUPP={...SUPP, pos:p.data||[], bookings:b.data||[], req:r.data||[]};
+  }catch(e){ SUPP={...SUPP, pos:[], bookings:[], req:[]}; }
+  if(String(CURRENT).startsWith('sup_')) go(CURRENT);
+}
+function suppGate(){ if(!SUPPLIER) return pageSupHome(); if(SUPP.pos===null){ suppLoad(); return emptyState('⏳','Loading…',''); } return null; }
+function suppComp(){
+  return supCompliance(SUPPLIER, SDATA.documents, SUPP.req, SUPPLIER.supplier_type==='subcontractor'?suppJobs():[]); }
+function suppJobs(){ const seen={}; (SUPP.pos||[]).filter(p=>['open','part_invoiced'].includes(p.status)).forEach(p=>{ if(p.job_ref && !seen[p.job_ref]) seen[p.job_ref]={id:p.job_id||null, job_ref:p.job_ref, title:p.job_title}; }); return Object.values(seen); }
+function pageSupHome2(){
+  const g=suppGate(); if(g) return g;
+  const today=ymd(new Date()), week=ymd(new Date(Date.now()+7*86400000)), month=ymd(new Date(Date.now()+30*86400000));
+  const acts=[], add=(ic,t,m,go,cls)=>acts.push({ic,t,m,go,cls});
+  (SUPP.pos||[]).filter(p=>['open','part_invoiced'].includes(p.status)).forEach(p=>{
+    if(!p.supplier_ack_at) add('🧾',`New purchase order ${p.po_ref}`,[p.job_ref,p.site].filter(Boolean).join(' · ')+' · '+jobMoney(p.total,p.currency),`go('sup_pos')`);
+    if(p.required_by && p.required_by<=week && !p.supplier_delivery_date) add('🚚',`${p.po_ref}: required by ${jobDate(p.required_by)}`,'Confirm the delivery date',`go('sup_pos')`,p.required_by<today?'red':'amber');
+    if(p.off_hire_requested_for && !p.off_hire_date) add('🏗',`${p.po_ref}: off-hire requested for ${jobDate(p.off_hire_requested_for)}`,'',`go('sup_pos')`,'amber'); });
+  const c=suppComp(); c.items.filter(i=>i.state!=='ok').forEach(i=>add('📄',`${i.label}: ${SUP_STATE[i.state][0].toLowerCase()}`,i.doc&&i.doc.expiry?'Expiry '+jobDate(i.doc.expiry):'Upload it in Compliance & Documents',`go('sup_docs')`,i.state==='expiring'?'amber':'red'));
+  if(supIsLabour(SUPPLIER)) (SDATA.engineers||[]).forEach(e=>{
+    (Array.isArray(e.cards)?e.cards:[]).filter(k=>k.expiry && String(k.expiry).slice(0,10)<=month).forEach(k=>add('🪪',`${e.full_name}: ${k.type} ${String(k.expiry).slice(0,10)<today?'expired':'expires'} ${jobDate(String(k.expiry).slice(0,10))}`,'',`go('sup_engineers')`,String(k.expiry).slice(0,10)<today?'red':'amber'));
+    if(!e.rtw_status || e.rtw_status==='Not checked') add('🛂',`${e.full_name}: right to work not checked`,'',`go('sup_engineers')`,'amber'); });
+  if(SUPPLIER.supplier_type==='labour_agency'){
+    (SUPP.bookings||[]).filter(b=>b.status!=='Cancelled' && !b.engineer_id).forEach(b=>add('🗓',`Booking to fill: ${b.title||b.job_ref||''}`,[b.job_ref,b.site,b.start_date?jobDate(b.start_date):''].filter(Boolean).join(' · '),`go('sup_jobs')`,'amber'));
+    (SUPP.bookings||[]).filter(b=>b.status==='Booked' && b.engineer_id && String(b.created_at||'').slice(0,10)>=ymd(new Date(Date.now()-7*86400000))).forEach(b=>add('🆕',`New booking: ${supEngName(b.engineer_id)} on ${b.job_ref||b.title||''}`,b.start_date?'From '+jobDate(b.start_date):'',`go('sup_jobs')`)); }
+  return `<div class="sechead"><h3>Welcome, ${esc(SUPPLIER.name)}</h3><span class="sub">${esc(supTypeName(SUPPLIER.supplier_type))} · what needs your attention</span><span class="line"></span></div>
+    <div class="grid kpis" style="margin-bottom:14px">${kpi('','🧾','Open purchase orders',(SUPP.pos||[]).filter(p=>['open','part_invoiced'].includes(p.status)).length,'','sup_pos')}
+      ${kpi(c.rag==='red'?'r':c.rag==='amber'?'a':'g','📄','Compliance',c.rag==='red'?'Action needed':c.rag==='amber'?'Expiring':'OK','','sup_docs')}
+      ${SUPPLIER.supplier_type==='labour_agency'?kpi('','🗓','Active bookings',(SUPP.bookings||[]).filter(b=>['Booked','On site'].includes(b.status)).length,'','sup_jobs'):''}</div>
+    <div class="card"><h4 style="margin:0 0 6px">To do</h4>${acts.length?`<div class="list">${acts.map(a=>`<div class="litem" style="cursor:pointer" onclick="${a.go}"><div class="av">${a.ic}</div><div class="bd"><div class="t"${a.cls==='red'?' style="color:var(--red)"':''}>${esc(a.t)}</div>${a.m?`<div class="m">${esc(a.m)}</div>`:''}</div><div class="when">→</div></div>`).join('')}</div>`:'<div class="empty"><div class="big">✅</div><b>Nothing to do right now</b></div>'}</div>`;
+}
+function pageSupPOs(){
+  const g=suppGate(); if(g) return g;
+  const plant=SUPPLIER.supplier_type==='plant_hire', pos=SUPP.pos||[];
+  return `<div class="sechead"><h3>🧾 Purchase Orders</h3><span class="sub">Every PO Mercury has issued to you</span><span class="line"></span></div>
+    ${pos.length?pos.map(p=>{ const left=Math.max(Number(p.total)-Number(p.invoiced||0),0), live=['open','part_invoiced'].includes(p.status);
+      return `<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap"><div style="flex:1;min-width:220px"><div style="font-weight:800;font-size:15px">${esc(p.po_ref)} ${p.supplier_ack_at?'<span class="chip green" style="font-size:10.5px">Acknowledged</span>':''} <span class="chip grey" style="font-size:10.5px">${esc(p.status)}</span></div>
+          <div class="muted" style="font-size:12.5px">${esc([p.job_ref, p.job_title].filter(Boolean).join(' · '))}${p.site?' — '+esc(p.site):''}</div>
+          ${p.delivery_address||p.site_address?`<div style="font-size:12.5px;margin-top:4px">Deliver to: ${esc(p.delivery_address||p.site_address)}</div>`:''}
+          ${p.required_by?`<div style="font-size:12.5px">Required by: <b>${jobDate(p.required_by)}</b></div>`:''}${p.supplier_notes?`<div class="muted" style="font-size:12px;margin-top:4px">${esc(p.supplier_notes)}</div>`:''}</div>
+        <div style="text-align:right"><div class="muted" style="font-size:11px">TOTAL</div><div style="font-weight:800">${jobMoney(p.total,p.currency)}</div><div class="muted" style="font-size:12px">Invoiced ${jobMoney(p.invoiced||0,p.currency)} · left ${jobMoney(left,p.currency)}</div></div></div>
+        <table class="tbl" style="margin-top:8px"><tbody>${(p.lines||[]).map(l=>`<tr><td>${esc(l.description||'')}</td><td style="text-align:right">${Number(l.quantity)} ${esc(l.unit||'')}</td><td style="text-align:right">${jobMoney(l.unit_cost,p.currency)}</td><td style="text-align:right">${jobMoney(l.line_total,p.currency)}</td></tr>`).join('')}</tbody></table>
+        ${p.off_hire_requested_for&&!p.off_hire_date?`<div class="note" style="border-left:3px solid var(--amber);padding-left:10px;margin-top:8px">Mercury has asked you to off-hire on <b>${jobDate(p.off_hire_requested_for)}</b>.</div>`:''}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
+          <button class="btn-ghost" onclick="suppPoPdf('${p.id}')">⬇ PDF</button>
+          ${live&&!p.supplier_ack_at?`<button class="btn-ghost" onclick="suppReply('${p.id}',{p_ack:true})">✓ Acknowledge</button>`:''}
+          ${live?`<label style="font-size:12.5px">Delivery date <input type="date" style="width:auto" value="${esc(p.supplier_delivery_date||'')}" onchange="suppReply('${p.id}',{p_delivery:this.value})"></label>`:''}
+          ${live&&plant?`<label style="font-size:12.5px">On hire <input type="date" style="width:auto" value="${esc(p.on_hire_date||'')}" onchange="suppReply('${p.id}',{p_on_hire:this.value})"></label><label style="font-size:12.5px">Off hire <input type="date" style="width:auto" value="${esc(p.off_hire_date||'')}" onchange="suppReply('${p.id}',{p_off_hire:this.value})"></label>`:''}
+          <span class="muted" style="font-size:11.5px">Acknowledging and dates are optional.</span></div></div>`; }).join(''):emptyState('🧾','No purchase orders yet','When Mercury issues you a PO it appears here.')}`;
+}
+async function suppReply(id, args){
+  if(PROFILE.role==='admin'){ alert('This is what the supplier sees — replies can only be sent from their own login.'); return; }
+  const r=await sb.rpc('supplier_po_reply',{p_po:id, p_ack:null, p_delivery:null, p_reply:null, p_on_hire:null, p_off_hire:null, ...args});
+  if(r.error) return alert('Not saved: '+r.error.message);
+  SUPP.pos=null; suppLoad();
+}
+function suppPoPdf(id){
+  const p=(SUPP.pos||[]).find(x=>x.id===id); if(!p||!window.jspdf) return;
+  const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'pt',format:'a4'}); const L=40,R=555; let y=60;
+  doc.setFont('helvetica','bold'); doc.setFontSize(18); doc.text('Purchase Order '+p.po_ref,L,y); y+=20;
+  doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.text('Mercury Automated Solutions  ·  to '+SUPPLIER.name,L,y); y+=16;
+  [[ 'Job',[p.job_ref,p.job_title].filter(Boolean).join(' · ')],['Site',p.site||''],['Deliver to',p.delivery_address||p.site_address||''],['Required by',p.required_by?jobDate(p.required_by):''],['Issued',p.issued_at?jobDate(String(p.issued_at).slice(0,10)):'']].forEach(([k,v])=>{ if(v){ doc.text(k+': '+v,L,y); y+=14; } });
+  y+=10; doc.setFont('helvetica','bold'); doc.text('Description',L,y); doc.text('Qty',360,y); doc.text('Unit',410,y); doc.text('Total',R,y,{align:'right'}); y+=12; doc.setFont('helvetica','normal');
+  (p.lines||[]).forEach(l=>{ doc.text(String(l.description||'').slice(0,60),L,y); doc.text(String(Number(l.quantity)),360,y); doc.text(jobMoney(l.unit_cost,p.currency),410,y); doc.text(jobMoney(l.line_total,p.currency),R,y,{align:'right'}); y+=14; });
+  y+=6; doc.setFont('helvetica','bold'); doc.text('Total (net) '+jobMoney(p.total,p.currency),R,y,{align:'right'});
+  if(p.supplier_notes){ y+=24; doc.setFont('helvetica','normal'); doc.text(doc.splitTextToSize(p.supplier_notes,R-L),L,y); }
+  doc.save(`${p.po_ref}.pdf`);
+}
+function pageSupBookings(){
+  const g=suppGate(); if(g) return g;
+  const today=ymd(new Date()), b=SUPP.bookings||[];
+  const grp={upcoming:b.filter(x=>x.status!=='Cancelled' && x.start_date && x.start_date>today), onsite:b.filter(x=>x.status!=='Cancelled' && (!x.start_date||x.start_date<=today) && (!x.end_date||x.end_date>=today) && x.status!=='Complete'), finished:b.filter(x=>x.status==='Complete'||x.status==='Cancelled'||(x.end_date&&x.end_date<today))};
+  const t=SUPP.tab||'upcoming', list=grp[t]||[];
+  return `<div class="sechead"><h3>🗓 Bookings</h3><span class="sub">Jobs Mercury has booked your engineers onto</span><span class="line"></span></div>
+    <div class="jtabs" style="margin-bottom:12px">${[['upcoming','Upcoming'],['onsite','On site'],['finished','Finished']].map(([k,l])=>`<button class="jtab ${t===k?'on':''}" onclick="SUPP.tab='${k}';go('sup_jobs')">${l} <span class="muted">${grp[k].length||''}</span></button>`).join('')}</div>
+    <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Job</th><th>Site</th><th>Dates</th><th>Engineer</th><th>Shift</th><th>Agreed rate</th><th>Status</th><th></th></tr></thead><tbody>
+    ${list.map(x=>`<tr><td><b>${esc(x.job_ref||'')}</b><div class="muted" style="font-size:11.5px">${esc(x.title||x.job_title||'')}</div></td><td>${esc(x.site||'')}${x.site_address?`<div class="muted" style="font-size:11px">${esc(x.site_address)}</div>`:''}</td>
+      <td style="white-space:nowrap">${x.start_date?jobDate(x.start_date):'—'}${x.end_date?' → '+jobDate(x.end_date):''}</td><td>${x.engineer_id?esc(supEngName(x.engineer_id)):'<span class="chip amber">To fill</span>'}</td><td>${esc(x.shift||'')}</td><td>${x.charge_rate!=null?gbp(x.charge_rate)+'/h':'—'}</td><td>${statusChip(x.status)}</td>
+      <td>${x.status!=='Cancelled'&&t!=='finished'?`<button class="edit-btn" onclick="openFillAssign('${x.id}')">${x.engineer_id?'Change':'Fill'}</button>`:''}</td></tr>`).join('')||'<tr><td colspan="8" class="muted" style="padding:12px">Nothing here.</td></tr>'}</tbody></table></div>`;
+}
+function pageSupCompliance(){
+  const g=suppGate(); if(g) return g;
+  const c=suppComp(), lab=supIsLabour(SUPPLIER);
+  const other=(SDATA.documents||[]).filter(d=>!c.items.some(i=>i.doc&&i.doc.id===d.id));
+  const today=ymd(new Date());
+  const cards=lab?(SDATA.engineers||[]).flatMap(e=>(Array.isArray(e.cards)?e.cards:[]).filter(k=>k.expiry).map(k=>({e,k}))).sort((a,b)=>String(a.k.expiry).localeCompare(String(b.k.expiry))):[];
+  return `<div class="sechead"><h3>📁 Compliance &amp; Documents</h3><span class="sub">What Mercury needs from a ${esc(supTypeName(SUPPLIER.supplier_type).toLowerCase())}</span><span class="line"></span><button class="addbtn" onclick="supDocForm('${SUPPLIER.id}','other','','')">＋ Other document</button></div>
+    <div class="card" style="margin-bottom:12px"><table class="tbl"><thead><tr><th>Required</th><th>Status</th><th>Expiry</th><th></th></tr></thead><tbody>
+    ${c.items.map(i=>`<tr><td><b>${esc(i.label)}</b></td><td>${supStateChip(i.state)}</td><td>${i.doc&&i.doc.expiry?jobDate(i.doc.expiry):'—'}</td><td style="text-align:right">${i.doc&&i.doc.file_path?`<a href="${esc(i.doc.file_path)}" target="_blank">📄</a> `:''}<button class="edit-btn" onclick="supDocForm('${SUPPLIER.id}','${i.req.doc_type}','${i.job&&i.job.id?i.job.id:''}','${jss(i.label)}')">${i.doc?'Replace':'Upload'}</button></td></tr>`).join('')||'<tr><td colspan="4" class="muted">Nothing required.</td></tr>'}</tbody></table>
+    ${SUPPLIER.supplier_type==='subcontractor'?'<div class="muted" style="font-size:12px;margin-top:6px">RAMS and method statements are needed for each job you have a purchase order on.</div>':''}</div>
+    ${other.length?`<div class="card" style="margin-bottom:12px"><h4 style="margin:0 0 6px">Other documents</h4><table class="tbl"><tbody>${other.map(d=>`<tr><td>${esc(d.label)}</td><td>${d.expiry?`<span class="chip ${cardStatus(d.expiry).c}">${jobDate(d.expiry)}</span>`:''}</td><td>${d.file_path?`<a href="${esc(d.file_path)}" target="_blank">📄 View</a>`:''}</td><td style="text-align:right"><button class="edit-btn" style="color:var(--red)" onclick="deleteSupDoc('${d.id}')">🗑</button></td></tr>`).join('')}</tbody></table></div>`:''}
+    ${lab?`<div class="card"><h4 style="margin:0 0 6px">Engineers’ cards</h4><table class="tbl"><tbody>${cards.map(({e,k})=>`<tr><td>${esc(e.full_name)}</td><td>${esc(k.type)}</td><td><span class="chip ${String(k.expiry).slice(0,10)<today?'red':cardStatus(k.expiry).c}">${jobDate(String(k.expiry).slice(0,10))}</span></td></tr>`).join('')||'<tr><td class="muted">No cards with expiry dates yet.</td></tr>'}</tbody></table></div>`:''}`;
+}
+function pageSupCompany(){
+  if(!SUPPLIER) return pageSupHome();
+  const s=SUPPLIER, row=(l,v)=>`<tr><td class="muted">${l}</td><td><b>${esc(v||'—')}</b></td></tr>`;
+  return `<div class="sechead"><h3>🏢 Company details</h3><span class="sub">As Mercury holds them</span><span class="line"></span></div>
+    <div class="row2"><div class="card"><table class="tbl"><tbody>${row('Name',s.name)}${row('Type',supTypeName(s.supplier_type))}${row('Address',s.address)}${row('Company number',s.company_no)}${row('VAT number',s.vat_no)}${row('Payment terms',s.payment_terms)}${row('Contact',s.contact_name)}${row('Email',s.contact_email)}${row('Phone',s.contact_phone)}</tbody></table></div>
+      <div class="card"><h4 style="margin:0 0 6px">Request a change</h4><div class="muted" style="font-size:12.5px;margin-bottom:8px">Tell us what needs changing (for example new bank details are confirmed separately by phone). It goes to Mercury’s accounts team.</div>
+        <textarea id="scr_text" rows="4" placeholder="What should change?"></textarea><div style="margin-top:8px;display:flex;gap:8px;align-items:center"><button class="btn" style="width:auto" onclick="suppChangeReq()">Send request</button><span class="savemsg" id="scrMsg"></span></div></div></div>`;
+}
+async function suppChangeReq(){
+  const t=val('scr_text').trim(); if(!t) return clSay('scrMsg','Write what should change.','err');
+  const r=await sb.from('supplier_change_requests').insert({supplier_id:SUPPLIER.id, request:t});
+  if(r.error) return clSay('scrMsg','Not sent: '+r.error.message,'err');
+  el('scr_text').value=''; clSay('scrMsg','✓ Sent to Mercury.','ok');
+}
+
+/* ---------- bookings need a job; old supplier modal and delete give way to the record page ---------- */
+function supJobOptions(cur){
+  const live=(JOBREG||[]).filter(j=>!['complete','closed','cancelled','invoiced'].includes(j.status) || j.id===cur);
+  return live.map(j=>`<option value="${j.id}" ${j.id===cur?'selected':''}>${esc(j.job_ref||'')} · ${esc(j.title||'')}</option>`).join('');
+}
+function supAssignJob(id){
+  const j=(JOBREG||[]).find(x=>x.id===id); if(!j) return;
+  const c=el('a_client'); if(c){ c.value=j.client_id||''; const s=el('a_site'); if(s){ s.innerHTML=supSites(j.client_id||'', j.site_id); } }
+  const t=el('a_title'); if(t && !t.value) t.value=j.title||'';
+}
+{ const _osm=openSupManage; openSupManage=function(id){ if(CURRENT==='suprec'){ closeForm(); SREC.id=id; go('suprec'); return; } return _osm(id); }; }
+deleteSupplier=function(id){ openSupplierRecord(id); setTimeout(supArchive,50); };
+{ const _esp=enterSupplierPreview; enterSupplierPreview=function(){ SUPP={pos:null, bookings:null, req:null, tab:'upcoming'}; return _esp.apply(this,arguments); }; }
 </script>
 </body>
 </html>
