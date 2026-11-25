@@ -5614,7 +5614,8 @@ function renderQuoteModal(){
   const rej=q.status==='rejected'?`<div class="box" style="background:var(--red-soft,rgba(239,68,68,.12));border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Lost</b>${q.lost_reason?' — '+esc(lostLabel(q.lost_reason)):''}${q.rejected_reason?' · '+esc(q.rejected_reason):''}</div>`:'';
   const fromReq=QEDIT.fromRequest?`<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">From the client’s request <b>${esc(QEDIT.fromRequest.title||'')}</b>. Their details are filled in below${(QEDIT.fromRequest.media_links||[]).length?`, and their ${QEDIT.fromRequest.media_links.length} photo(s) will be added as attachments`:''}.</div>`:'';
   const arch=q.archived_at?`<div class="box" style="background:var(--amber-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Archived</b> ${jobDate(q.archived_at)} — ${esc(q.archive_reason||'')}</div>`:'';
-  const vers=(QEDIT.versions||[]).length?`<div class="muted" style="font-size:12px;margin-top:8px">Previous versions: ${QEDIT.versions.map(v=>`<a href="#" onclick="event.preventDefault();qShowVersion(${v.revision})">rev ${v.revision}</a> (${jobDate(v.saved_at)})`).join(' · ')}</div>`:'';
+  const canBack=typeof qCanRestore==='function'&&qCanRestore();
+  const vers=(QEDIT.versions||[]).length?`<div class="muted" style="font-size:12px;margin-top:8px">${q.restored_from_revision?`<b>This revision is a copy of rev ${q.restored_from_revision}.</b> `:''}Previous versions: ${QEDIT.versions.map(v=>`<a href="#" onclick="event.preventDefault();qShowVersion(${v.revision})">rev ${v.revision}</a> (${jobDate(v.saved_at)})${canBack?` <button class="btn-ghost" style="padding:2px 8px;font-size:11.5px" onclick="qRestoreVersion(${v.revision})">Go back to rev ${v.revision}</button>`:''}`).join(' · ')}</div>`:'';
   // action buttons by status
   const b=[];
   const canQ=jobCan('quotes.create');
@@ -7540,49 +7541,16 @@ async function xoSendNow(){
 /* ---------- Queue and history ---------- */
 function xoQueueHtml(history){
   const rows=XO.items.filter(i=>history?['sent','withdrawn','in_xero'].includes(i.status):['queued','sending','failed'].includes(i.status));
-  const top=history?'':xoSendNowHtml();
-  if(!rows.length) return top+`<div class="card" style="padding:18px">${emptyState(history?'🗂':'📭',history?'Nothing yet':'Queue is empty',history?'Items sent to Xero, taken back or marked as already in Xero appear here.':'Ticked items wait here until they are sent.')}</div>`;
+  if(!rows.length) return `<div class="card" style="padding:18px">${emptyState(history?'🗂':'📭',history?'Nothing yet':'Queue is empty',history?'Items sent to Xero, taken back or marked as already in Xero appear here.':'Ticked items wait here until they are sent.')}</div>`;
   const type=t=>(XO_TYPES.find(x=>x[0]===t)||[t,t])[1];
   const can=jobCan('xero.send');
-  return top+`<div class="card" style="padding:8px 10px;overflow-x:auto"><table class="tbl"><thead><tr><th>Reference</th><th>Type</th><th>Contact</th><th style="text-align:right">Net</th><th>Status</th><th>Who / when</th><th></th></tr></thead><tbody>${rows.map(i=>{
+  return `<div class="card" style="padding:8px 10px;overflow-x:auto"><table class="tbl"><thead><tr><th>Reference</th><th>Type</th><th>Contact</th><th style="text-align:right">Net</th><th>Status</th><th>Who / when</th><th></th></tr></thead><tbody>${rows.map(i=>{
       const s=XO_STATUS[i.status]||[i.status,'grey'];
       const wait=i.status==='queued'&&!xoConnected(i.entity_code)?'<div class="muted" style="font-size:11.5px">Waiting for the Xero connection</div>':'';
       return `<tr><td><b>${esc(i.ref)}</b><div class="muted" style="font-size:11.5px">${esc(i.entity_code)}</div></td><td style="font-size:12.5px">${esc(type(i.item_type))}</td><td>${esc(i.party_name||'')}</td>
         <td style="text-align:right">${i.item_type==='po_billed'?'':jobMoney(i.amount,i.currency)}</td><td><span class="chip ${s[1]}">${s[0]}</span>${wait}${i.xero_number?`<div style="font-size:12px">Xero ${esc(i.xero_number)}</div>`:''}${i.error?`<div style="color:var(--red);font-size:12px">${esc(i.error)}</div>`:''}${i.reason?`<div class="muted" style="font-size:12px">${esc(i.reason)}</div>`:''}</td>
         <td style="font-size:12px">${esc(xoUser(i.queued_by))}<div class="muted">${jobDate(i.queued_at)}${i.closed_at?' → '+jobDate(i.closed_at)+' '+esc(xoUser(i.closed_by)):''}</div></td>
         <td>${can&&['queued','failed','in_xero'].includes(i.status)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoWithdraw('${i.id}','${i.status}')">${i.status==='in_xero'?'Undo':'Take back'}</button>`:''}</td></tr>`; }).join('')}</tbody></table></div>`;
-}
-/* ---------- Send now (Phase 5b) ----------
-   Runs the "xero-sender" back-room function, which delivers every queued
-   item to Xero and marks it In Xero or Failed. Accounts only. */
-let XO_RUN=null, XO_RUNNING=false;
-function xoSendNowHtml(){
-  if(!jobCan('xero.send')) return '';
-  const waiting=XO.items.filter(i=>i.status==='queued').length;
-  const res=XO_RUN?`<div style="margin-top:10px;font-size:13px">
-      <div style="font-weight:700;color:${XO_RUN.ok?'var(--green)':'var(--amber)'}">${XO_RUN.ok?'✓':'!'} ${esc(XO_RUN.message||'')}</div>
-      ${(XO_RUN.results||[]).map(r=>`<div style="font-size:12.5px;margin-top:3px">${r.result==='In Xero'?'<span style="color:var(--green)">✓</span>':'<span style="color:var(--red)">✕</span>'} <b>${esc(r.ref||'')}</b> — ${esc(r.result||'')}${r.xeroNumber?' · Xero '+esc(r.xeroNumber):''}${r.reason?'<div class="muted" style="margin-left:16px">'+esc(r.reason)+'</div>':''}${(r.notes||[]).map(n=>'<div class="muted" style="margin-left:16px">'+esc(n)+'</div>').join('')}</div>`).join('')}
-    </div>`:'';
-  return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <div style="flex:1;font-size:13px">${waiting?`<b>${waiting}</b> item${waiting===1?'':'s'} waiting to go to Xero.`:'Nothing waiting to go to Xero.'}</div>
-        <button class="btn" id="xoRunBtn" style="width:auto;padding:9px 22px" ${waiting&&!XO_RUNNING?'':'disabled'} onclick="xoRunCourier()">${XO_RUNNING?'Sending…':'Send now'}</button>
-      </div>${res}</div>`;
-}
-async function xoRunCourier(){
-  if(XO_RUNNING) return;
-  const waiting=XO.items.filter(i=>i.status==='queued').length;
-  if(!confirm(`Send ${waiting} queued item${waiting===1?'':'s'} to Xero now?`)) return;
-  XO_RUNNING=true; XO_RUN=null; const b=el('xoRunBtn'); if(b){ b.disabled=true; b.textContent='Sending…'; }
-  let out;
-  try{
-    const r=await sb.functions.invoke('xero-sender',{body:{}});
-    if(r.error){
-      let detail=null; try{ detail=await r.error.context.json(); }catch(e){}
-      out=detail&&detail.message?{ok:false,message:detail.message+(detail.xeroSaid?' — '+detail.xeroSaid:''),results:detail.results||[]}:{ok:false,message:'Could not run the send: '+(r.error.message||String(r.error))};
-    } else out=r.data||{ok:false,message:'No reply from the send.'};
-  }catch(e){ out={ok:false,message:'Could not run the send: '+(e.message||String(e))}; }
-  XO_RUNNING=false; XO_RUN=out; XO=null; go('xero');
 }
 async function xoWithdraw(id,st){
   const reason=prompt(st==='in_xero'?'Put this item back on the check list?\n\nReason:':'Take this item back? It returns to the check list.\n\nReason:'); if(reason===null) return;
@@ -10643,6 +10611,187 @@ function supAssignJob(id){
 { const _osm=openSupManage; openSupManage=function(id){ if(CURRENT==='suprec'){ closeForm(); SREC.id=id; go('suprec'); return; } return _osm(id); }; }
 deleteSupplier=function(id){ openSupplierRecord(id); setTimeout(supArchive,50); };
 { const _esp=enterSupplierPreview; enterSupplierPreview=function(){ SUPP={pos:null, bookings:null, req:null, tab:'upcoming'}; return _esp.apply(this,arguments); }; }
+/* ===================================================================
+   HISTORY  —  release 20.
+   One readable history for quotes, jobs and POs: every change to the
+   record AND to its lines, stages, hours and so on, written out as
+   "Line 'Mesh guard panels': unit cost £100.00 → £150.00".
+   Quotes can go back to an earlier revision (as a new revision).
+   =================================================================== */
+
+const HIST_KIND={quotes:'Quote', quote_lines:'Line', jobs:'Job', purchase_orders:'PO', po_lines:'PO line', supplier_invoices:'Supplier invoice',
+  supplier_invoice_lines:'Invoice line', job_variations:'Variation', variation_lines:'Variation line', job_billing_stages:'Billing stage',
+  billing_stage_items:'Billed item', labour_entries:'Hours', job_other_costs:'Other cost', job_team:'Team', job_forecast_entries:'Forecast',
+  job_completions:'Completion', job_budget_lines:'Budget', commercial_attachments:'Attachment'};
+const HIST_FIELD={title:'Title', description:'Description', location:'Location', client_notes:'Notes for the client', internal_notes:'Internal notes',
+  terms:'Terms', valid_until:'Valid until', status:'Status', total_sell:'Quote total', revision:'Revision', client_id:'Client', site_id:'Site',
+  contact_name:'Client contact', contact_email:'Contact email', project_owner:'Project owner', follow_up_date:'Follow-up date', lost_reason:'Lost reason',
+  rejected_reason:'Reason', client_po_ref:'Client PO number', acceptance_method:'Accepted by', accepted_by_name:'Accepted by (client)', accepted_on:'Accepted on',
+  acceptance_note:'Acceptance note', archive_reason:'Archive reason', archived_at:'Archived', line_type:'Type', cost_code:'Cost code', quantity:'Quantity',
+  unit:'Unit', unit_cost:'Unit cost', pricing_basis:'Pricing', pricing_pct:'Markup / margin', unit_sell:'Unit price', line_cost:'Line cost', line_sell:'Line total',
+  line_total:'Line total', sort_order:'Position', supplier_id:'Supplier', required_by:'Required by', delivery_address:'Deliver to', supplier_notes:'Notes for the supplier',
+  currency:'Currency', total:'PO total', invoiced:'Invoiced', job_manager:'Project owner', start_date:'Start date', end_date:'End date', progress_pct:'Progress %',
+  contract_value:'Contract value', notes:'Notes', mobilisation:'Mobilisation checks', amount:'Amount', label:'Name', stage_type:'Type', planned_date:'Planned date',
+  xero_invoice_no:'Xero invoice', invoice_date:'Invoice date', invoiced_amount:'Invoiced amount', payment_status:'Payment', cancel_reason:'Cancel reason',
+  worker_id:'Person', work_date:'Date', hours:'Hours', ot_hours:'Overtime hours', cost_rate:'Cost rate', cost_amount:'Cost', chargeable:'Chargeable',
+  void_reason:'Void reason', cost:'Cost', sell:'Selling price', cost_total:'Cost total', sell_total:'Selling total', var_type:'Type', instructed_by:'Instructed by',
+  instructed_on:'Instructed on', at_risk:'At risk', approval_method:'Approved by', client_ref:'Client reference', approved_on:'Approved on', closed_reason:'Reason',
+  invoice_no:'Invoice number', net_amount:'Net', vat_amount:'VAT', note:'Note', role:'Role', remove_reason:'Reason', removed_at:'Removed',
+  supplier_ack_at:'Acknowledged by supplier', supplier_delivery_date:'Delivery date (supplier)', supplier_reply:'Supplier reply', on_hire_date:'On hire',
+  off_hire_date:'Off hire', off_hire_requested_for:'Off-hire requested for', restored_from_revision:'Copied from', cost_date:'Date', reference:'Reference',
+  supplier_name:'Supplier', source:'From', item_date:'Date', unit_price:'Unit price', entity_code:'Trading company', quote_ref:'Q number', job_ref:'Job number',
+  po_ref:'PO number', var_ref:'Variation number', lead_ref:'L number', doc_type:'Type', file_name:'File'};
+const HIST_MONEY=new Set(['total_sell','unit_cost','unit_sell','line_cost','line_sell','line_total','total','invoiced','contract_value','amount','invoiced_amount',
+  'cost_rate','cost_amount','cost','sell','cost_total','sell_total','net_amount','vat_amount','unit_price','final_value','final_cost_forecast']);
+const HIST_SKIP=new Set(['id','updated_at','created_at','created_by','archived_by','issued_by','issued_at','accepted_recorded_by','accepted_at','converted_by',
+  'converted_at','confirmed_by','confirmed_at','closed_by','closed_at','approved_recorded_by','approved_recorded_at','submitted_at','ready_at','invoiced_by',
+  'quote_id','po_id','job_id','variation_id','invoice_id','stage_id','po_line_id','pdf_path','worker_type','removed_by','storage_path','file_url','mime_type',
+  'size_bytes','reopened_by','completed_by','entered_by','xero_sync_status','off_hire_requested_at','stage_seq','var_seq','po_seq','source_id']);
+const HIST_STATUS={quotes:()=>typeof Q_STATUSES!=='undefined'?Q_STATUSES:[], jobs:()=>typeof JOB_STATUSES!=='undefined'?JOB_STATUSES:[],
+  purchase_orders:()=>typeof PO_STATUSES!=='undefined'?PO_STATUSES:[], job_billing_stages:()=>typeof BILL_STATUS!=='undefined'?BILL_STATUS:[],
+  job_variations:()=>typeof VAR_STATUS!=='undefined'?VAR_STATUS:[], labour_entries:()=>[['proposed','To confirm'],['confirmed','Confirmed'],['void','Void']]};
+const HIST_FIRST=['status','revision','restored_from_revision','description','title','label','quantity','unit','unit_cost','pricing_basis','pricing_pct','cost','sell','amount','hours','ot_hours'];
+const HIST_LAST=['unit_sell','line_cost','line_sell','line_total','cost_amount','total_sell','total','invoiced'];
+function histRank(k){ const i=HIST_FIRST.indexOf(k); if(i>=0) return i; const j=HIST_LAST.indexOf(k); return j>=0?100+j:50; }
+const HIST_DERIVED=new Set(['total_sell','total','invoiced','cost_total','sell_total']);
+const HIST_UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function histPerson(id){ const l=(LOGINS||[]).find(x=>x.id===id); return l?(l.full_name||l.email):null; }
+function histWho(h){ const l=(LOGINS||[]).find(x=>x.email&&x.email===h.user_email); return l&&l.full_name?l.full_name:(h.user_email||'System'); }
+function histName(field, v){
+  const f=(arr,key)=>{ const x=(arr||[]).find(r=>r.id===v); return x?x[key]:null; };
+  if(field==='client_id') return f(typeof CLIENTS!=='undefined'?CLIENTS:[],'name');
+  if(field==='site_id'){ const s=(JOBREG_SITES||[]).find(x=>x.id===v); return s?(s.name||s.code||s.city):null; }
+  if(field==='supplier_id') return f(typeof SUPPLIERS_ALL!=='undefined'&&SUPPLIERS_ALL.length?SUPPLIERS_ALL:(typeof SUPPLIERS!=='undefined'?SUPPLIERS:[]),'name');
+  if(field==='worker_id') return f(typeof WORKERS!=='undefined'?WORKERS:[],'full_name');
+  if(['project_owner','job_manager','user_id'].includes(field)) return histPerson(v);
+  return null;
+}
+function histVal(table, field, v, cur){
+  if(v===null||v===undefined||v==='') return '—';
+  if(field==='status'||field==='payment_status'){ const s=(HIST_STATUS[table]?HIST_STATUS[table]():[]).find(x=>x[0]===v); return s?s[1]:String(v).replace(/_/g,' '); }
+  if(HIST_MONEY.has(field)) return jobMoney(v,cur||'GBP');
+  if(field==='pricing_pct') return Number(v)+'%';
+  if(field==='pricing_basis') return {markup:'Markup %',margin:'Margin %',fixed:'Fixed price'}[v]||v;
+  if(field==='revision'||field==='restored_from_revision') return 'rev '+v;
+  if(field==='line_type'&&typeof LINE_TYPES!=='undefined'){ const t=LINE_TYPES.find(x=>x[0]===v); if(t) return t[1]; }
+  if(field==='mobilisation') return 'updated';
+  if(typeof v==='boolean') return v?'Yes':'No';
+  if(typeof v==='object') return Array.isArray(v)?`${v.length} item${v.length===1?'':'s'}`:'updated';
+  const s=String(v);
+  if(HIST_UUID.test(s)) return histName(field,s)||'another record';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return jobDate(s);
+  if(/^\d{4}-\d{2}-\d{2}T/.test(s)){ const d=new Date(s); return isNaN(d)?s:d.toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  if(['acceptance_method','approval_method'].includes(field)) return {purchase_order:'client PO',written_confirmation:'written confirmation'}[s]||s;
+  if(['lost_reason','stage_type','var_type','source','doc_type'].includes(field)) return s.replace(/_/g,' ');
+  return s.length>140?s.slice(0,140)+'…':s;
+}
+function histFieldName(f){ return HIST_FIELD[f]||f.replace(/_/g,' ').replace(/^./,c=>c.toUpperCase()); }
+/* one line of history in words */
+function histDescribe(h, ctx){
+  const kind=HIST_KIND[h.table_name]||h.table_name.replace(/_/g,' '), own=h.table_name===ctx.table&&h.record_id===ctx.id;
+  const name=h.record_label?` ‘${esc(h.record_label)}’`:'', cur=ctx.cur, row=h.changes||{};
+  const v=(f)=>esc(histVal(h.table_name,f,row[f],cur));
+  if(h.action==='insert'){
+    if(own) return `<b>${kind} created</b>`;
+    let extra='';
+    if(h.table_name==='quote_lines') extra=` — ${v('quantity')} ${esc(row.unit||'')} × ${v('unit_cost')}, ${row.pricing_basis==='fixed'?'fixed price':v('pricing_pct')+' '+row.pricing_basis} → ${v('line_sell')}`;
+    else if(h.table_name==='po_lines') extra=` — ${v('quantity')} ${esc(row.unit||'')} × ${v('unit_cost')} = ${v('line_total')}`;
+    else if(h.table_name==='variation_lines') extra=` — cost ${v('cost')}, selling ${v('sell')}`;
+    else if(['job_billing_stages','job_other_costs','supplier_invoice_lines','job_forecast_entries'].includes(h.table_name)) extra=` — ${v('amount')}`;
+    else if(h.table_name==='labour_entries') extra=` — ${v('hours')}h${Number(row.ot_hours)?` + ${v('ot_hours')}h overtime`:''}`;
+    else if(h.table_name==='supplier_invoices') extra=` — net ${v('net_amount')}`;
+    else if(h.table_name==='purchase_orders') extra=row.description?` — ${esc(row.description)}`:'';
+    return `<b>Added ${kind.toLowerCase()}</b>${name}${extra}`;
+  }
+  if(h.action==='delete') return `<b>Removed ${kind.toLowerCase()}</b>${name}`;
+  if(h.action==='archive') return `<b>${kind}${own?'':name} archived</b>${row.archive_reason&&row.archive_reason.to?': '+esc(row.archive_reason.to):''}`;
+  if(h.action==='restore') return `<b>${kind}${own?'':name} restored</b>`;
+  if(!row||typeof row!=='object'||Array.isArray(row)) return `<b>${kind}${own?'':name}</b> changed`;
+  const keys=Object.keys(row).filter(k=>!HIST_SKIP.has(k)&&row[k]&&typeof row[k]==='object'&&'from' in row[k])
+    .sort((a,b)=>histRank(a)-histRank(b));
+  if(!keys.length) return '';
+  const parts=keys.map(k=>{
+    if(k==='revision') return `revised: ${esc(histVal(h.table_name,k,row[k].from,cur))} → <b>${esc(histVal(h.table_name,k,row[k].to,cur))}</b>`;
+    if(k==='restored_from_revision') return row[k].to?`<b>copy of ${esc(histVal(h.table_name,k,row[k].to,cur))}</b>`:'';
+    return `${esc(histFieldName(k))}: ${esc(histVal(h.table_name,k,row[k].from,cur))} → <b>${esc(histVal(h.table_name,k,row[k].to,cur))}</b>`; }).filter(Boolean);
+  return `${own?'':`<b>${kind}${name}</b>: `}${parts.join('; ')}`;
+}
+/* load and draw the history of one quote / job / PO into a box */
+async function histRender(box, ctx){
+  if(!box) return;
+  if(!jobCan('history.view')){ box.innerHTML='<div class="muted">Your role cannot see change history.</div>'; return; }
+  box.innerHTML='<div class="muted">Loading history…</div>';
+  try{ if(!(LOGINS||[]).length) await loadLogins(); }catch(e){}
+  try{ if(typeof WORKERS!=='undefined'&&WORKERS===null&&jobCan('cost_rates.view')) await loadWorkers(); }catch(e){}
+  const r=await sb.rpc('record_history',{p_table:ctx.table, p_id:ctx.id});
+  if(r.error){ box.innerHTML=`<div class="muted">Could not load: ${esc(r.error.message)}</div>`; return; }
+  const raw=r.data||[];
+  // one row per save: the same person within a few seconds
+  const groups=[];
+  raw.forEach(h=>{ const g=groups[groups.length-1], t=new Date(h.changed_at).getTime();
+    if(g && g.who===h.user_email && Math.abs(g.t-t)<8000) g.hs.push(h); else groups.push({t, who:h.user_email, h, hs:[h]}); });
+  let n=0;
+  groups.forEach(g=>{
+    const hs=g.hs.slice().reverse();          // read each save in the order it happened
+    // totals that only moved because lines changed: show once, first value to last
+    const tot={}, rest=[];
+    hs.forEach(h=>{ const c=h.changes||{}, ks=h.action==='update'&&c&&typeof c==='object'&&!Array.isArray(c)?Object.keys(c).filter(k=>!HIST_SKIP.has(k)):[];
+      if(ks.length && ks.every(k=>HIST_DERIVED.has(k))){ ks.forEach(k=>{ const key=h.table_name+'|'+h.record_id+'|'+k; if(!tot[key]) tot[key]={h, k, from:c[k].from}; tot[key].to=c[k].to; }); }
+      else rest.push(h); });
+    g.items=rest.map(h=>histDescribe(h,ctx)).filter(Boolean);
+    Object.values(tot).forEach(x=>{ if(x.from===x.to) return; const own=x.h.table_name===ctx.table&&x.h.record_id===ctx.id;
+      g.items.push(`${own?'':`<b>${HIST_KIND[x.h.table_name]||''}${x.h.record_label?` ‘${esc(x.h.record_label)}’`:''}</b>: `}${esc(histFieldName(x.k))}: ${esc(histVal(x.h.table_name,x.k,x.from,ctx.cur))} → <b>${esc(histVal(x.h.table_name,x.k,x.to,ctx.cur))}</b>`); });
+    n+=g.items.length; });
+  const rows={length:n};
+  for(let i=groups.length-1;i>=0;i--) if(!groups[i].items.length) groups.splice(i,1);
+  ctx.groups=groups; HIST_CTX=ctx;
+  box.innerHTML=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input placeholder="Search the history (e.g. a line, a price, a name)…" oninput="histFilter(this.value)" style="flex:1">
+      <span class="muted" style="font-size:12px">${rows.length} change${rows.length===1?'':'s'}</span></div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl" id="histTable"><thead><tr><th style="width:150px">When</th><th style="width:150px">Who</th><th>What changed</th></tr></thead><tbody>${histRows(groups)}</tbody></table></div>`;
+}
+let HIST_CTX=null;
+function histRows(groups){
+  return groups.map(g=>`<tr><td style="white-space:nowrap;vertical-align:top">${new Date(g.t).toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
+    <td style="vertical-align:top">${esc(histWho(g.h))}</td><td style="font-size:12.5px">${g.items.map(i=>`<div style="padding:2px 0">${i}</div>`).join('')}</td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">No changes recorded.</td></tr>';
+}
+function histFilter(q){
+  if(!HIST_CTX) return; q=q.trim().toLowerCase(); const t=el('histTable'); if(!t) return;
+  const gs=!q?HIST_CTX.groups:HIST_CTX.groups.map(g=>({...g, items:g.items.filter(i=>i.replace(/<[^>]+>/g,'').toLowerCase().includes(q)||histWho(g.h).toLowerCase().includes(q))})).filter(g=>g.items.length);
+  t.querySelector('tbody').innerHTML=histRows(gs);
+}
+function histModal(title, back, ctx){
+  closeForm();
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:980px;width:96vw"><div class="modal-h"><h3>History · ${esc(title)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b" id="histBox"></div><div class="modal-foot"><button class="btn-ghost" onclick="${back}">${back.includes('PO')?'Back to PO':back.includes('Quote')?'Back to quote':'Back'}</button></div></div>`;
+  document.body.appendChild(wrap);
+  histRender(el('histBox'), ctx);
+}
+
+/* hook into the existing History buttons */
+qHistory=async function(){ const q=QEDIT.q; histModal(q.quote_ref||q.lead_ref||'Quote', `closeForm();openQuote('${q.id}')`, {table:'quotes', id:q.id, cur:q.currency}); };
+poHistory=async function(){ const p=PEDIT.p; histModal(p.po_ref||'PO', `closeForm();openPO('${p.id}')`, {table:'purchase_orders', id:p.id, cur:p.currency}); };
+jobLoadHistory=async function(j){ histRender(el('jobHist'), {table:'jobs', id:j.id, cur:j.currency}); };
+openJobHistory=async function(id){ const j=(JOBREG||[]).find(x=>x.id===id)||{}; histModal(j.job_ref||'Job', `closeForm();openJobForm('${id}')`, {table:'jobs', id, cur:j.currency}); };
+
+/* ---------- go back to an earlier quote revision ---------- */
+function qCanRestore(){
+  const q=QEDIT&&QEDIT.q; if(!q||!q.id||q.job_id||q.archived_at||!q.quote_ref||q.status==='lead') return false;
+  if(!jobCan('quotes.create')) return false;
+  if(q.status==='accepted' && !jobCan('quotes.approve')) return false;
+  return (QEDIT.versions||[]).length>0;
+}
+async function qRestoreVersion(rev){
+  const q=QEDIT.q;
+  if(!confirm(`Go back to rev ${rev} of ${q.quote_ref}?\n\nA new revision (rev ${q.revision+1}) is created as a copy of rev ${rev}: its lines, prices and printed text. The current version (rev ${q.revision}) is kept in the history.\n\nCheck it, then issue it to the client again.`)) return;
+  const r=await sb.rpc('restore_quote_revision',{p_quote:q.id, p_revision:rev});
+  if(r.error){ msg('Not done: '+r.error.message,'err'); return; }
+  const f=await sb.from('quotes').select('*').eq('id',q.id).single(); if(!f.error) qStore(f.data);
+  await openQuote(q.id); msg(`✓ Now rev ${r.data}, a copy of rev ${rev}. Check it and issue it again.`,'ok');
+  if(CURRENT==='quotereg'){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); }
+}
 </script>
 </body>
 </html>
