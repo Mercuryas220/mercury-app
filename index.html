@@ -5435,7 +5435,11 @@ function qStatusChip(q){
   const x=Q_STATUSES.find(r=>r[0]===q.status)||[q.status,q.status,'grey'];
   return `<span class="chip ${x[2]}">${esc(x[1])}</span>`;
 }
-function qRef(q){ if(!q.quote_ref) return esc(q.lead_ref||''); return esc(q.quote_ref)+(q.revision>1?` <span class="muted" style="font-weight:600">rev ${q.revision}</span>`:''); }
+// Revisions are named as issued to the client: Q-UK-0014 (the original), Q-UK-0014 Rev 1, Rev 2 ...
+function qRevLabel(n){ return Number(n)>1?'Rev '+(Number(n)-1):'Original'; }
+function qRevName(q,n){ n=n||q.revision; return (q.quote_ref||'')+(Number(n)>1?' Rev '+(Number(n)-1):''); }
+function qRevFile(q,n){ n=n||q.revision; return (q.quote_ref||'quote')+(Number(n)>1?'-Rev'+(Number(n)-1):''); }
+function qRef(q){ if(!q.quote_ref) return esc(q.lead_ref||''); return esc(q.quote_ref)+(q.revision>1?` <span class="muted" style="font-weight:600">Rev ${q.revision-1}</span>`:''); }
 function qRefText(q){ return q.quote_ref||q.lead_ref||''; }
 function qAddDays(n){ const d=new Date(); d.setDate(d.getDate()+n); return ymd(d); }
 function qNum(v){ const n=Number(v); return isFinite(n)?n:0; }
@@ -5615,7 +5619,7 @@ function renderQuoteModal(){
   const fromReq=QEDIT.fromRequest?`<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">From the client’s request <b>${esc(QEDIT.fromRequest.title||'')}</b>. Their details are filled in below${(QEDIT.fromRequest.media_links||[]).length?`, and their ${QEDIT.fromRequest.media_links.length} photo(s) will be added as attachments`:''}.</div>`:'';
   const arch=q.archived_at?`<div class="box" style="background:var(--amber-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Archived</b> ${jobDate(q.archived_at)} — ${esc(q.archive_reason||'')}</div>`:'';
   const canBack=typeof qCanRestore==='function'&&qCanRestore();
-  const vers=(QEDIT.versions||[]).length?`<div class="muted" style="font-size:12px;margin-top:8px">${q.restored_from_revision?`<b>This revision is a copy of rev ${q.restored_from_revision}.</b> `:''}Previous versions: ${QEDIT.versions.map(v=>`<a href="#" onclick="event.preventDefault();qShowVersion(${v.revision})">rev ${v.revision}</a> (${jobDate(v.saved_at)})${canBack?` <button class="btn-ghost" style="padding:2px 8px;font-size:11.5px" onclick="qRestoreVersion(${v.revision})">Go back to rev ${v.revision}</button>`:''}`).join(' · ')}</div>`:'';
+  const vers=(QEDIT.versions||[]).length?`<div class="muted" style="font-size:12px;margin-top:8px">${q.restored_from_revision?`<b>This revision is a copy of the ${qRevLabel(q.restored_from_revision)==='Original'?'original':qRevLabel(q.restored_from_revision)}.</b> `:''}Previous versions: ${QEDIT.versions.map(v=>`<a href="#" onclick="event.preventDefault();qShowVersion(${v.revision})">${qRevLabel(v.revision)}</a> (${jobDate(v.saved_at)})${canBack?` <button class="btn-ghost" style="padding:2px 8px;font-size:11.5px" onclick="qRestoreVersion(${v.revision})">Go back to ${qRevLabel(v.revision)==='Original'?'the original':qRevLabel(v.revision)}</button>`:''}`).join(' · ')}</div>`:'';
   // action buttons by status
   const b=[];
   const canQ=jobCan('quotes.create');
@@ -5728,7 +5732,7 @@ async function saveQuote(issue){
   if(issue){
     if(!lines.length) return msg('Add at least one line before issuing.','err');
     if(!head.valid_until || head.valid_until<ymd(new Date())) return msg('Set a “valid until” date (today or later) before issuing.','err');
-    if(!confirm(`Issue ${q.quote_ref} rev ${q.revision}? It will be locked; to change it later you would create a revision.`)) return;
+    if(!confirm(`Issue ${qRevName(q)}? It will be locked; to change it later you would create a revision.`)) return;
   }
   ['qeSave','qeIssue'].forEach(b=>{ const x=el(b); if(x) x.disabled=true; }); msg('Saving…');
   try{
@@ -5787,7 +5791,7 @@ function qPdfDoc(q, lines){
   if(addr) doc.text(doc.splitTextToSize(addr,R-L-56)[0],L+56,50);
   if(reg) doc.text(reg,L+56,62);
   y=112; doc.setTextColor(15,32,51); doc.setFont('helvetica','bold'); doc.setFontSize(20); doc.text('QUOTATION', L, y);
-  doc.setFontSize(11); doc.text(`${q.quote_ref}${q.revision>1?'  rev '+q.revision:''}`, R, y, {align:'right'});
+  doc.setFontSize(11); doc.text(`${q.quote_ref}${q.revision>1?'  Rev '+(q.revision-1):''}`, R, y, {align:'right'});
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(90,107,128);
   doc.text(`Date: ${jobDate((q.issued_at||new Date().toISOString()).slice(0,10))}    Valid until: ${jobDate(q.valid_until)}`, R, y+15, {align:'right'});
   y+=40;
@@ -5820,7 +5824,7 @@ function qPdfDoc(q, lines){
   block('Terms', q.terms);
   doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(140,150,165);
   const pages=doc.getNumberOfPages();
-  for(let p=1;p<=pages;p++){ doc.setPage(p); doc.text(`${q.quote_ref}${q.revision>1?' rev '+q.revision:''} · page ${p} of ${pages}`, W/2, H-24, {align:'center'}); }
+  for(let p=1;p<=pages;p++){ doc.setPage(p); doc.text(`${q.quote_ref}${q.revision>1?' Rev '+(q.revision-1):''} · page ${p} of ${pages}`, W/2, H-24, {align:'center'}); }
   return doc;
 }
 async function qLinesForPdf(id){
@@ -5839,7 +5843,7 @@ async function qMakeAndStorePdf(q){
 async function qPreviewPdf(){
   if(!window.jspdf){ alert('PDF tool still loading — try again in a moment.'); return; }
   const w=window.open('about:blank','_blank');
-  try{ const q=QEDIT.q; const doc=qPdfDoc(q, await qLinesForPdf(q.id)); qShowPdf(doc, `${q.quote_ref}-rev${q.revision}-DRAFT.pdf`, w); }
+  try{ const q=QEDIT.q; const doc=qPdfDoc(q, await qLinesForPdf(q.id)); qShowPdf(doc, `${qRevFile(q)}-DRAFT.pdf`, w); }
   catch(e){ if(w) w.close(); alert('Could not build the PDF: '+(e.message||e)); }
 }
 async function qDownloadPdf(path){
@@ -5851,7 +5855,7 @@ async function qDownloadPdf(path){
   }
   // no stored copy: rebuild from the quote as it stands
   if(!window.jspdf){ if(w) w.close(); alert('PDF tool still loading — try again in a moment.'); return; }
-  try{ const doc=qPdfDoc(q, await qLinesForPdf(q.id)); qShowPdf(doc, `${q.quote_ref}-rev${q.revision}.pdf`, w); }
+  try{ const doc=qPdfDoc(q, await qLinesForPdf(q.id)); qShowPdf(doc, `${qRevFile(q)}.pdf`, w); }
   catch(e){ if(w) w.close(); alert('Could not build the PDF: '+(e.message||e)); }
 }
 function qShowVersion(rev){
@@ -5859,7 +5863,7 @@ function qShowVersion(rev){
   const s=v.snapshot||{}, q=s.quote||{};
   if(q.pdf_path) return qDownloadPdf(q.pdf_path);
   if(!window.jspdf){ alert('PDF tool still loading.'); return; }
-  qShowPdf(qPdfDoc(q, s.lines||[]), `${q.quote_ref}-rev${rev}.pdf`, window.open('about:blank','_blank'));
+  qShowPdf(qPdfDoc(q, s.lines||[]), `${qRevFile(q,rev)}.pdf`, window.open('about:blank','_blank'));
 }
 
 // Show a built PDF in its own tab (falls back to a download if the browser blocks the tab)
@@ -5879,11 +5883,11 @@ async function qUpdate(patch, okText){
 }
 async function qRevise(){
   const q=QEDIT.q;
-  if(!confirm(`Create revision ${q.revision+1} of ${q.quote_ref}? The current version (rev ${q.revision}) is kept and the quote reopens for editing.`)) return;
+  if(!confirm(`Create ${qRevName(q,q.revision+1)}? The current version (${qRevName(q)}) is kept and the quote reopens for editing.`)) return;
   const r=await sb.rpc('revise_quote',{p_quote:q.id});
   if(r.error){ msg('Not revised: '+r.error.message,'err'); return; }
   const f=await sb.from('quotes').select('*').eq('id',q.id).single(); if(!f.error) qStore(f.data);
-  await openQuote(q.id); msg(`✓ Now on rev ${r.data}. Edit and issue again.`,'ok');
+  await openQuote(q.id); msg(`✓ Now ${qRevName(q,r.data)}. Edit and issue it again.`,'ok');
   if(CURRENT==='quotereg'){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); }
 }
 /* ---------- lead → quote, lost, owner/notes ---------- */
@@ -5997,7 +6001,7 @@ async function qConvertFromList(id){ await openQuote(id); qConvertForm(); }
 function qConvertForm(){
   const q=QEDIT.q; closeForm();
   const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal" style="max-width:620px"><div class="modal-h"><h3>Convert to job · ${esc(q.quote_ref)}${q.revision>1?' rev '+q.revision:''}</h3><button class="modal-x" onclick="closeForm();openQuote('${q.id}')">✕</button></div>
+  wrap.innerHTML=`<div class="modal" style="max-width:620px"><div class="modal-h"><h3>Convert to job · ${esc(qRevName(q))}</h3><button class="modal-x" onclick="closeForm();openQuote('${q.id}')">✕</button></div>
     <div class="modal-b">
       <div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">
         Job <b>${esc(q.quote_ref)}</b> will be created for <b>${esc(jobClientName(q.client_id))}</b> with a contract value of <b>${jobMoney(q.total_sell,q.currency)}</b> (excl. VAT). The quote’s costs become the job’s original budget, which is then locked, and its attachments come with it. This can’t be undone.</div>
@@ -7426,9 +7430,11 @@ TITLES.xero='Send to Xero';
 const XO_TYPES=[['invoice','Customer invoices','Sent as draft sales invoices for you to approve in Xero'],
   ['purchase_order','Purchase orders','So accounts can see every PO in Xero'],
   ['bill','Supplier invoices → draft bills','Entered against POs; sent as draft bills'],
-  ['po_billed','POs to mark as Billed','Fully invoiced here; marks Xero’s copy as Billed']];
+  ['po_billed','POs to mark as Billed','Fully invoiced here; marks Xero’s copy as Billed'],
+  ['quote','Quotes','Every issued version, each as its own Xero quote: Q-UK-0014, Q-UK-0014 Rev 1, Rev 2 …'],
+  ['quote_status','Quotes won or lost','Marks the Xero quote Accepted or Declined']];
 const XO_STATUS={queued:['Queued','cyan'],sending:['Sending','cyan'],sent:['In Xero','green'],failed:['Failed','red'],withdrawn:['Taken back','grey'],in_xero:['Already in Xero','violet']};
-const xoKey=(t,id)=>t+'|'+id;
+const xoKey=(t,id,r)=>t+'|'+id+(r!=null?'|'+r:'');
 function xoUser(id){ const l=(LOGINS||[]).find(x=>x.id===id); return l?l.email:''; }
 function xoSettings(e){ return (XO&&XO.settings||[]).find(s=>s.entity_code===(e||XO_ENT))||{}; }
 function xoConnected(e){ return !!xoSettings(e).connected_at; }
@@ -7446,7 +7452,7 @@ async function loadXero(){
       jobFetchAll(()=>sb.from('suppliers').select('id,name,status').order('name')),
       sb.from('cost_codes').select('*').order('sort_order').then(r=>r.data||[])]);
     XO={outbox,items,links,settings,sups,codes};
-    const live=new Set(outbox.map(o=>xoKey(o.item_type,o.source_id))); XO_SEL=new Set([...XO_SEL].filter(k=>live.has(k)));
+    const live=new Set(outbox.map(o=>xoKey(o.item_type,o.source_id,o.source_rev))); XO_SEL=new Set([...XO_SEL].filter(k=>live.has(k)));
   }catch(e){ XO_ERR=e.message||String(e); XO=null; }
   XO_LOADING=false;
   if(CURRENT==='xero') go('xero');
@@ -7472,20 +7478,20 @@ function pageXero(){
 
 /* ---------- To check ---------- */
 function xoCheckHtml(){
-  if(!XO.outbox.length) return `<div class="card" style="padding:18px">${emptyState('✅','Nothing waiting','New POs, supplier invoices and billing stages marked ready will appear here.')}</div>`;
+  if(!XO.outbox.length) return `<div class="card" style="padding:18px">${emptyState('✅','Nothing waiting','Issued quotes, new POs, supplier invoices and billing stages marked ready will appear here.')}</div>`;
   const can=jobCan('xero.send');
   const sec=XO_TYPES.map(([t,title,sub])=>{
     const rows=XO.outbox.filter(o=>o.item_type===t); if(!rows.length) return '';
     const sendable=rows.filter(o=>o.can_send);
-    const allOn=sendable.length&&sendable.every(o=>XO_SEL.has(xoKey(o.item_type,o.source_id)));
-    const tr=rows.map(o=>{ const k=xoKey(o.item_type,o.source_id), probs=o.problems||[], warns=o.warnings||[];
+    const allOn=sendable.length&&sendable.every(o=>XO_SEL.has(xoKey(o.item_type,o.source_id,o.source_rev)));
+    const tr=rows.map(o=>{ const k=xoKey(o.item_type,o.source_id,o.source_rev), probs=o.problems||[], warns=o.warnings||[];
       const link=probs.some(p=>/not linked to a Xero contact/.test(p))&&can?` <button class="btn-ghost" style="padding:2px 8px;font-size:12px" onclick="xoLinkForm('${o.entity_code}','${o.party_type}','${o.party_id}')">Link…</button>`:'';
       return `<tr style="${o.can_send?'':'background:var(--red-soft)'}"><td style="width:28px">${can?`<input type="checkbox" class="xo_chk" style="width:auto" data-k="${k}" ${o.can_send?'':'disabled'} ${XO_SEL.has(k)?'checked':''} onchange="xoTick(this)">`:''}</td>
         <td style="white-space:nowrap"><b>${esc(o.ref)}</b><div class="muted" style="font-size:11.5px">${esc(o.job_ref||'')} · ${esc(o.entity_code)}</div></td>
         <td>${esc(o.party_name||'—')}<div class="muted" style="font-size:11.5px">${o.xero_contact?'Xero: '+esc(o.xero_contact):''}</div></td>
         <td>${jobDate(o.item_date)}</td><td style="text-align:right;white-space:nowrap">${t==='po_billed'?'':jobMoney(o.amount,o.currency)}</td>
         <td style="font-size:12px">${probs.map(p=>`<div style="color:var(--red)">✕ ${esc(p)}</div>`).join('')}${link}${warns.map(w=>`<div style="color:var(--amber)">! ${esc(w)}</div>`).join('')}</td>
-        <td style="white-space:nowrap;text-align:right"><button class="btn-ghost" style="padding:4px 8px" onclick="xoPreview('${t}','${o.source_id}')">View</button>${can?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoMarkInXero('${t}','${o.source_id}','${esc(o.ref).replace(/'/g,'')}')">Already in Xero</button>`:''}</td></tr>`; }).join('');
+        <td style="white-space:nowrap;text-align:right"><button class="btn-ghost" style="padding:4px 8px" onclick="xoPreview('${t}','${o.source_id}',${o.source_rev==null?'null':o.source_rev})">View</button>${can?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoMarkInXero('${t}','${o.source_id}','${esc(o.ref).replace(/'/g,'')}',${o.source_rev==null?'null':o.source_rev})">Already in Xero</button>`:''}</td></tr>`; }).join('');
     return `<div class="card" style="padding:10px 12px;margin-bottom:14px;overflow-x:auto"><div style="display:flex;gap:10px;align-items:center;margin-bottom:6px"><div style="flex:1"><b>${title}</b> <span class="muted" style="font-size:12px">· ${sub}</span></div>
         ${can&&sendable.length?`<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" style="width:auto" ${allOn?'checked':''} onchange="xoTickAll('${t}',this.checked)"> Tick all ready (${sendable.length})</label>`:''}</div>
       <table class="tbl xo_tbl" data-type="${t}"><thead><tr><th></th><th>Reference</th><th>Contact</th><th>Date</th><th style="text-align:right">Net</th><th>Checks</th><th></th></tr></thead><tbody>${tr}</tbody></table></div>`; }).join('');
@@ -7496,32 +7502,32 @@ function xoCheckHtml(){
 }
 function xoTick(cb){ cb.checked?XO_SEL.add(cb.dataset.k):XO_SEL.delete(cb.dataset.k); const n=XO_SEL.size;
   el('xoSelText').innerHTML=n?`<b>${n}</b> item${n===1?'':'s'} ticked`:'Tick the items you have checked.'; el('xoReview').disabled=!n; }
-function xoTickAll(t,on){ XO.outbox.filter(o=>o.item_type===t&&o.can_send).forEach(o=>{ const k=xoKey(t,o.source_id); on?XO_SEL.add(k):XO_SEL.delete(k); }); go('xero'); }
+function xoTickAll(t,on){ XO.outbox.filter(o=>o.item_type===t&&o.can_send).forEach(o=>{ const k=xoKey(t,o.source_id,o.source_rev); on?XO_SEL.add(k):XO_SEL.delete(k); }); go('xero'); }
 
-async function xoPreview(t,id){
-  const r=await sb.rpc('xero_item_preview',{p_type:t,p_id:id});
+async function xoPreview(t,id,rev){
+  const r=await sb.rpc('xero_item_preview',{p_type:t,p_id:id,p_rev:rev==null?null:rev});
   if(r.error){ alert('Could not load: '+poFriendlyError(r.error)); return; }
   const k=r.data, p=k.payload||{}, cur=k.currency, lines=p.LineItems||[];
   const row=(l,v)=>v==null||v===''?'':`<tr><td class="muted" style="width:170px">${l}</td><td>${esc(String(v))}</td></tr>`;
-  const kind={invoice:'Draft sales invoice',purchase_order:'Purchase order',bill:'Draft bill',po_billed:'Mark PO as Billed'}[t];
+  const kind={invoice:'Draft sales invoice',purchase_order:'Purchase order',bill:'Draft bill',po_billed:'Mark PO as Billed',quote:'Quote',quote_status:'Quote status'}[t];
   const tot=lines.reduce((a,l)=>a+Number(l.Quantity||1)*Number(l.UnitAmount||0),0);
   billModal('xoPrev',`${kind} · ${esc(k.ref)}`,
     `${(k.problems||[]).map(x=>`<div style="color:var(--red);font-size:13px">✕ ${esc(x)}</div>`).join('')}${(k.warnings||[]).map(x=>`<div style="color:var(--amber);font-size:13px">! ${esc(x)}</div>`).join('')}
-     <table class="tbl" style="margin:8px 0">${row('Xero contact',p.Contact?(p.Contact.Name||'')+(p.Contact.ContactID?'':(k.xero_contact==='(new contact)'?' (new)':'')):'')}${row('Number',p.InvoiceNumber||p.PurchaseOrderNumber)}${row('Date',p.Date&&jobDate(p.Date))}${row('Due date',p.DueDate&&jobDate(p.DueDate))}${row('Delivery date',p.DeliveryDate&&jobDate(p.DeliveryDate))}${row('Reference',p.Reference)}${row('Currency',p.CurrencyCode)}${row('Status in Xero',p.Status)}${row('Amounts are','excluding VAT — Xero adds VAT from the tax rate')}</table>
+     <table class="tbl" style="margin:8px 0">${row('Xero contact',p.Contact?(p.Contact.Name||'')+(p.Contact.ContactID?'':(k.xero_contact==='(new contact)'?' (new)':'')):'')}${row('Number',p.InvoiceNumber||p.PurchaseOrderNumber||p.QuoteNumber)}${row('Title',p.Title)}${row('Date',p.Date&&jobDate(p.Date))}${row('Expires',p.ExpiryDate&&jobDate(p.ExpiryDate))}${row('Due date',p.DueDate&&jobDate(p.DueDate))}${row('Delivery date',p.DeliveryDate&&jobDate(p.DeliveryDate))}${row('Reference',p.Reference)}${row('Currency',p.CurrencyCode)}${row('Status in Xero',p.Status)}${row('Amounts are','excluding VAT — Xero adds VAT from the tax rate')}</table>
      ${lines.length?`<table class="tbl"><thead><tr><th>Description</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit</th><th>Account</th><th>Tax rate</th></tr></thead><tbody>${lines.map(l=>`<tr><td style="white-space:pre-line">${esc(l.Description)}</td><td style="text-align:right">${esc(l.Quantity)}</td><td style="text-align:right">${jobMoney(l.UnitAmount,cur)}</td><td>${esc(l.AccountCode||'')}</td><td>${esc(l.TaxType||'')}${l.Tracking?'<div class="muted" style="font-size:11px">'+esc(l.Tracking.map(x=>x.Name+': '+x.Option).join(', '))+'</div>':''}</td></tr>`).join('')}
        <tr><td colspan="2"><b>Net total</b></td><td style="text-align:right"><b>${jobMoney(tot,cur)}</b></td><td colspan="2"></td></tr></tbody></table>`:''}`,
     `<button class="btn-ghost" onclick="el('xoPrev').remove()">Close</button>`, 760);
 }
-async function xoMarkInXero(t,id,ref){
+async function xoMarkInXero(t,id,ref,rev){
   const reason=prompt(`Take ${ref} off the list because it is already in Xero (keyed in by hand)?\n\nNote (e.g. "entered by hand on 18/11"):`); if(reason===null) return;
   if(!reason.trim()){ alert('A note is needed.'); return; }
   const no=prompt('Xero number, if you have it (optional):','');
-  const r=await sb.rpc('xero_mark_in_xero',{p_type:t,p_id:id,p_reason:reason.trim(),p_xero_number:no||null});
+  const r=await sb.rpc('xero_mark_in_xero',{p_type:t,p_id:id,p_reason:reason.trim(),p_xero_number:no||null,p_rev:rev==null?null:rev});
   if(r.error){ alert('Not saved: '+poFriendlyError(r.error)); return; }
   xoReload();
 }
 function xoReview(){
-  const sel=XO.outbox.filter(o=>XO_SEL.has(xoKey(o.item_type,o.source_id)));
+  const sel=XO.outbox.filter(o=>XO_SEL.has(xoKey(o.item_type,o.source_id,o.source_rev)));
   const by=XO_TYPES.map(([t,title])=>{ const r=sel.filter(o=>o.item_type===t); if(!r.length) return '';
     return `<div style="margin-bottom:10px"><b>${title}</b> — ${r.length} · ${t==='po_billed'?'':sumByCur(r,'amount')}<div style="font-size:12.5px">${r.map(o=>`<div>${esc(o.ref)} · ${esc(o.party_name||'')}${t==='po_billed'?'':' · '+jobMoney(o.amount,o.currency)}${(o.warnings||[]).length?' <span style="color:var(--amber)">('+(o.warnings||[]).length+' warning'+((o.warnings||[]).length>1?'s':'')+')</span>':''}</div>`).join('')}</div></div>`; }).join('');
   const notConn=[...new Set(sel.map(o=>o.entity_code))].filter(e=>!xoConnected(e));
@@ -7531,7 +7537,7 @@ function xoReview(){
     `<button class="btn-ghost" onclick="el('xoSend').remove()">Cancel</button><button class="btn" id="xoGo" disabled onclick="xoSendNow()">Send</button>`, 640);
 }
 async function xoSendNow(){
-  const items=XO.outbox.filter(o=>XO_SEL.has(xoKey(o.item_type,o.source_id))).map(o=>({type:o.item_type,id:o.source_id}));
+  const items=XO.outbox.filter(o=>XO_SEL.has(xoKey(o.item_type,o.source_id,o.source_rev))).map(o=>({type:o.item_type,id:o.source_id,rev:o.source_rev}));
   el('xoGo').disabled=true; billSay('xoSend','Sending…');
   const r=await sb.rpc('xero_queue',{p_items:items});
   if(r.error){ el('xoGo').disabled=false; return billSay('xoSend','Not sent: '+poFriendlyError(r.error)); }
@@ -10673,7 +10679,7 @@ function histVal(table, field, v, cur){
   if(HIST_MONEY.has(field)) return jobMoney(v,cur||'GBP');
   if(field==='pricing_pct') return Number(v)+'%';
   if(field==='pricing_basis') return {markup:'Markup %',margin:'Margin %',fixed:'Fixed price'}[v]||v;
-  if(field==='revision'||field==='restored_from_revision') return 'rev '+v;
+  if(field==='revision'||field==='restored_from_revision') return typeof qRevLabel==='function'?qRevLabel(v):'rev '+v;
   if(field==='line_type'&&typeof LINE_TYPES!=='undefined'){ const t=LINE_TYPES.find(x=>x[0]===v); if(t) return t[1]; }
   if(field==='mobilisation') return 'updated';
   if(typeof v==='boolean') return v?'Yes':'No';
@@ -10713,7 +10719,7 @@ function histDescribe(h, ctx){
   if(!keys.length) return '';
   const parts=keys.map(k=>{
     if(k==='revision') return `revised: ${esc(histVal(h.table_name,k,row[k].from,cur))} → <b>${esc(histVal(h.table_name,k,row[k].to,cur))}</b>`;
-    if(k==='restored_from_revision') return row[k].to?`<b>copy of ${esc(histVal(h.table_name,k,row[k].to,cur))}</b>`:'';
+    if(k==='restored_from_revision') return row[k].to?`<b>copy of the ${esc(histVal(h.table_name,k,row[k].to,cur)).replace('Original','original')}</b>`:'';
     return `${esc(histFieldName(k))}: ${esc(histVal(h.table_name,k,row[k].from,cur))} → <b>${esc(histVal(h.table_name,k,row[k].to,cur))}</b>`; }).filter(Boolean);
   return `${own?'':`<b>${kind}${name}</b>: `}${parts.join('; ')}`;
 }
@@ -10785,11 +10791,12 @@ function qCanRestore(){
 }
 async function qRestoreVersion(rev){
   const q=QEDIT.q;
-  if(!confirm(`Go back to rev ${rev} of ${q.quote_ref}?\n\nA new revision (rev ${q.revision+1}) is created as a copy of rev ${rev}: its lines, prices and printed text. The current version (rev ${q.revision}) is kept in the history.\n\nCheck it, then issue it to the client again.`)) return;
+  const old=qRevName(q,rev), next=qRevName(q,q.revision+1);
+  if(!confirm(`Go back to ${old}?\n\nA new revision (${next}) is created as a copy of ${old}: its lines, prices and printed text. The current version (${qRevName(q)}) is kept in the history.\n\nCheck it, then issue it to the client again.`)) return;
   const r=await sb.rpc('restore_quote_revision',{p_quote:q.id, p_revision:rev});
   if(r.error){ msg('Not done: '+r.error.message,'err'); return; }
   const f=await sb.from('quotes').select('*').eq('id',q.id).single(); if(!f.error) qStore(f.data);
-  await openQuote(q.id); msg(`✓ Now rev ${r.data}, a copy of rev ${rev}. Check it and issue it again.`,'ok');
+  await openQuote(q.id); msg(`✓ Now ${qRevName(q,r.data)}, a copy of ${qRevName(q,rev)}. Check it and issue it again.`,'ok');
   if(CURRENT==='quotereg'){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); }
 }
 </script>
