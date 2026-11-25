@@ -811,6 +811,7 @@ function renderShell(){
       <button class="nav-btn" data-page="quotes"><span class="ic">📝</span> Quote Requests</button>
       <button class="nav-btn" data-page="analytics"><span class="ic">📊</span> Analytics</button>`;
   const staffNav = (!isOffice && !isClient && !isSupplier) ? `
+      ${PROFILE.role==='engineer'?`<div class="navlabel">My work</div><button class="nav-btn" data-page="myrams"><span class="ic">🦺</span> My RAMS</button>`:''}
       <div class="navlabel">Programme</div>
       <button class="nav-btn active" data-page="overview"><span class="ic">◫</span> Overview</button>
       <button class="nav-btn" data-page="sites"><span class="ic">▦</span> Sites &amp; Progress</button>
@@ -5000,6 +5001,7 @@ function go(page){
     else if(page==='compliance')html=pageCompliance();
     else if(page==='suppliers')html=pageSuppliers2();
     else if(page==='suprec')html=pageSupRec();
+    else if(page==='myrams')html=pageMyRams();
     else if(page==='sup_pos')html=pageSupPOs();
     else if(page==='sup_company')html=pageSupCompany();
     else if(page==='finance')html=pageFinance();
@@ -5128,7 +5130,7 @@ async function loadJobRegisterNow(){
     const [jobs, ents, sites] = await Promise.all([
       jobCan('jobs.view') ? jobFetchAll(()=>sb.from('jobs').select('*').order('created_at',{ascending:false})) : Promise.resolve([]),
       sb.from('trading_entities').select('*').order('code'),
-      jobFetchAll(()=>sb.from('sites').select('id,client_id,code,name,city,country,address,archived_at').order('code'))
+      jobFetchAll(()=>sb.from('sites').select('id,client_id,code,name,city,country,address,nearest_ae,archived_at').order('code'))
     ]);
     if(ents.error) throw ents.error;
     JOBREG=jobs; JOBREG_ENTITIES=ents.data||[]; JOBREG_SITES=sites;
@@ -5231,7 +5233,7 @@ function jobEntityChanged(){
   const lbl=el('jb_cur'); if(lbl) lbl.textContent=e?e.base_currency:'';
 }
 
-const JOB_TABS=[['ov','Overview'],['costs','Costs & POs'],['labour','Labour'],['vars','Variations'],['billing','Billing'],['team','Team'],['mob','Mobilisation'],['reports','Reports'],['atts','Attachments'],['hist','History']];
+const JOB_TABS=[['ov','Overview'],['costs','Costs & POs'],['labour','Labour'],['vars','Variations'],['billing','Billing'],['team','Team'],['mob','Mobilisation'],['rams','RAMS'],['reports','Reports'],['atts','Attachments'],['hist','History']];
 function jobTab(t){
   if(!JOB_TABS.some(x=>x[0]===t)) t='ov';
   JOB_TAB=t;
@@ -5244,6 +5246,7 @@ function jobTab(t){
   if(t==='mob' && typeof jobLoadMobilisation==='function') jobLoadMobilisation(j);
   if(t==='reports' && typeof jobLoadReports==='function') jobLoadReports(j);
   if(t==='atts' && typeof jobLoadAttachments==='function') jobLoadAttachments(j);
+  if(t==='rams' && typeof jobLoadRams==='function') jobLoadRams(j);
   if(t==='hist') jobLoadHistory(j);
 }
 function openJobForm(id){
@@ -5294,7 +5297,7 @@ function openJobForm(id){
     <div class="modal-b">
       ${pane('ov', (!isNew?`<div id="jobPnl"></div>`:'')+details)}
       ${isNew?'':pane('costs',`<div id="jobCosts"></div>`)+pane('labour',`<div id="jobLabour"></div>`)+pane('vars',`<div id="jobVars"></div>`)+pane('billing',`<div id="jobBilling"></div>`)
-        +pane('team',`<div id="jobTeam"><div class="muted">Loading…</div></div>`)+pane('mob',`<div id="jobMob"><div class="muted">Loading…</div></div>`)
+        +pane('team',`<div id="jobTeam"><div class="muted">Loading…</div></div>`)+pane('mob',`<div id="jobMob"><div class="muted">Loading…</div></div>`)+pane('rams',`<div id="jobRams"><div class="muted">Loading…</div></div>`)
         +pane('reports',`<div id="jobReports"><div class="muted">Loading…</div></div>`)+pane('atts',`<div id="jobAtts"><div class="muted">Loading…</div></div>`)+pane('hist',`<div id="jobHist"><div class="muted">Loading…</div></div>`)}
     </div>
     <div class="modal-foot">
@@ -5435,7 +5438,11 @@ function qStatusChip(q){
   const x=Q_STATUSES.find(r=>r[0]===q.status)||[q.status,q.status,'grey'];
   return `<span class="chip ${x[2]}">${esc(x[1])}</span>`;
 }
-function qRef(q){ if(!q.quote_ref) return esc(q.lead_ref||''); return esc(q.quote_ref)+(q.revision>1?` <span class="muted" style="font-weight:600">rev ${q.revision}</span>`:''); }
+// Revisions are named as issued to the client: Q-UK-0014 (the original), Q-UK-0014 Rev 1, Rev 2 ...
+function qRevLabel(n){ return Number(n)>1?'Rev '+(Number(n)-1):'Original'; }
+function qRevName(q,n){ n=n||q.revision; return (q.quote_ref||'')+(Number(n)>1?' Rev '+(Number(n)-1):''); }
+function qRevFile(q,n){ n=n||q.revision; return (q.quote_ref||'quote')+(Number(n)>1?'-Rev'+(Number(n)-1):''); }
+function qRef(q){ if(!q.quote_ref) return esc(q.lead_ref||''); return esc(q.quote_ref)+(q.revision>1?` <span class="muted" style="font-weight:600">Rev ${q.revision-1}</span>`:''); }
 function qRefText(q){ return q.quote_ref||q.lead_ref||''; }
 function qAddDays(n){ const d=new Date(); d.setDate(d.getDate()+n); return ymd(d); }
 function qNum(v){ const n=Number(v); return isFinite(n)?n:0; }
@@ -5460,7 +5467,7 @@ async function loadQuotesNow(){
     const [qs, ents, sites, codes] = await Promise.all([
       jobCan('quotes.view') ? jobFetchAll(()=>sb.from('quotes').select('*').order('created_at',{ascending:false})) : Promise.resolve([]),
       sb.from('trading_entities').select('*').order('code'),
-      jobFetchAll(()=>sb.from('sites').select('id,client_id,code,name,city,country,address,archived_at').order('code')),
+      jobFetchAll(()=>sb.from('sites').select('id,client_id,code,name,city,country,address,nearest_ae,archived_at').order('code')),
       sb.from('cost_codes').select('*').eq('active',true).order('sort_order')
     ]);
     if(ents.error) throw ents.error; if(codes.error) throw codes.error;
@@ -5491,9 +5498,11 @@ function quoteSetFilter(k,v){ QUOTE_F[k]=v; const t=el('quoteTable'); if(t){ t.i
 function quoteTableHtml(){
   const rows=quoteFiltered();
   if(!rows.length) return `<div class="empty" style="padding:26px"><div class="big">📝</div><b>No quotes match</b><div style="margin-top:6px;font-size:13px">${(QUOTES||[]).length?'Try a different filter.':(jobCan('quotes.create')?'Tap “＋ New quote” to create the first one.':'No quotes yet.')}</div></div>`;
-  const conv=jobCan('jobs.convert');
-  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Ref</th><th>Quote</th><th>Client</th><th>Project Owner / Manager</th><th>Status</th><th>Created</th><th>Valid until / follow-up</th><th style="text-align:right">Value</th><th></th></tr></thead><tbody>${
-    rows.map(x=>`<tr${x.archived_at?' style="opacity:.6"':''}>
+  const conv=jobCan('jobs.convert'), bulk=jobCan('quotes.create');
+  QSEL=new Set([...QSEL].filter(id=>rows.some(x=>x.id===id&&qBulkOk(x))));
+  const elig=rows.filter(qBulkOk), allOn=elig.length&&elig.every(x=>QSEL.has(x.id));
+  return `${bulk?qBulkBar():''}<div style="overflow-x:auto"><table class="tbl"><thead><tr>${bulk?`<th style="width:28px">${elig.length?`<input type="checkbox" style="width:auto" title="Select all shown" ${allOn?'checked':''} onchange="qBulkAll(this.checked)">`:''}</th>`:''}<th>Ref</th><th>Quote</th><th>Client</th><th>Project Owner / Manager</th><th>Status</th><th>Created</th><th>Valid until / follow-up</th><th style="text-align:right">Value</th><th></th></tr></thead><tbody>${
+    rows.map(x=>`<tr${x.archived_at?' style="opacity:.6"':''}>${bulk?`<td>${qBulkOk(x)?`<input type="checkbox" class="qsel" style="width:auto" ${QSEL.has(x.id)?'checked':''} onchange="qBulkTick('${x.id}',this.checked)">`:''}</td>`:''}
       <td style="white-space:nowrap"><b>${qRef(x)}</b>${x.quote_ref&&x.lead_ref?`<div class="muted" style="font-size:11px">from ${esc(x.lead_ref)}</div>`:''}<div class="muted" style="font-size:11px">${esc(x.entity_code)}</div></td>
       <td>${esc(x.title)}${x.client_po_ref?`<div class="muted" style="font-size:11.5px">PO ${esc(x.client_po_ref)}</div>`:''}</td>
       <td>${esc(jobClientName(x.client_id))}${x.site_id?`<div class="muted" style="font-size:11.5px">${esc(jobSiteName(x.site_id))}</div>`:''}</td>
@@ -5534,6 +5543,7 @@ function pageQuoteRegister(){
 
 /* ---------- the quote editor ---------- */
 async function openQuote(id, asLead, preset){
+  if(typeof ramsLoadTpl==='function') await ramsLoadTpl();
   try{ await qLoadContacts(); }catch(e){ console.warn('contacts',e); }
   if(!id){
     const base=asLead?{status:'lead',revision:1,follow_up_date:qAddDays(7)}:{status:'pending',revision:1,valid_until:qAddDays(30),terms:Q_DEFAULT_TERMS};
@@ -5614,7 +5624,8 @@ function renderQuoteModal(){
   const rej=q.status==='rejected'?`<div class="box" style="background:var(--red-soft,rgba(239,68,68,.12));border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Lost</b>${q.lost_reason?' — '+esc(lostLabel(q.lost_reason)):''}${q.rejected_reason?' · '+esc(q.rejected_reason):''}</div>`:'';
   const fromReq=QEDIT.fromRequest?`<div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">From the client’s request <b>${esc(QEDIT.fromRequest.title||'')}</b>. Their details are filled in below${(QEDIT.fromRequest.media_links||[]).length?`, and their ${QEDIT.fromRequest.media_links.length} photo(s) will be added as attachments`:''}.</div>`:'';
   const arch=q.archived_at?`<div class="box" style="background:var(--amber-soft);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px"><b>Archived</b> ${jobDate(q.archived_at)} — ${esc(q.archive_reason||'')}</div>`:'';
-  const vers=(QEDIT.versions||[]).length?`<div class="muted" style="font-size:12px;margin-top:8px">Previous versions: ${QEDIT.versions.map(v=>`<a href="#" onclick="event.preventDefault();qShowVersion(${v.revision})">rev ${v.revision}</a> (${jobDate(v.saved_at)})`).join(' · ')}</div>`:'';
+  const canBack=typeof qCanRestore==='function'&&qCanRestore();
+  const vers=(QEDIT.versions||[]).length?`<div class="muted" style="font-size:12px;margin-top:8px">${q.restored_from_revision?`<b>This revision is a copy of the ${qRevLabel(q.restored_from_revision)==='Original'?'original':qRevLabel(q.restored_from_revision)}.</b> `:''}Previous versions: ${QEDIT.versions.map(v=>`<a href="#" onclick="event.preventDefault();qShowVersion(${v.revision})">${qRevLabel(v.revision)}</a> (${jobDate(v.saved_at)})${canBack?` <button class="btn-ghost" style="padding:2px 8px;font-size:11.5px" onclick="qRestoreVersion(${v.revision})">Go back to ${qRevLabel(v.revision)==='Original'?'the original':qRevLabel(v.revision)}</button>`:''}`).join(' · ')}</div>`:'';
   // action buttons by status
   const b=[];
   const canQ=jobCan('quotes.create');
@@ -5666,6 +5677,7 @@ function renderQuoteModal(){
         <div class="fld"><label>Project Owner / Manager</label><select id="qe_owner" ${metaEd?'':'disabled'}>${qOwnerOptions(q.project_owner)}</select></div>
         <div class="fld"><label>Follow-up date${lead?'':' (optional)'}</label><input id="qe_follow" type="date" ${metaEd?'':'disabled'} value="${esc(String(q.follow_up_date||'').slice(0,10))}"></div>
       </div>
+      ${lead||typeof ramsQuoteField!=='function'?'':ramsQuoteField(q, dis)}
       ${isNew||lead?'':`<div style="margin:6px 0 4px;font-weight:700">Lines</div>
       <div class="card fld" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead>${head}</thead><tbody id="qLines">${lines}</tbody></table>
         ${editLines?`<div style="padding:8px 4px"><button class="btn-ghost" onclick="qAddLine()">＋ Add line</button></div>`:''}
@@ -5709,6 +5721,7 @@ async function saveQuote(issue){
   if(el('qe_inotes')) head.internal_notes=v('qe_inotes')||null;
   if(el('qe_owner')) head.project_owner=v('qe_owner')||null;
   if(el('qe_follow')) head.follow_up_date=v('qe_follow')||null;
+  if(el('qe_rams') && !el('qe_rams').disabled) head.rams_template=v('qe_rams')||null;
   if(q.status==='lead'){ delete head.valid_until; delete head.client_notes; delete head.terms; }
   if(isNew){ head.entity_code=v('qe_entity'); if(q.status==='lead') head.status='lead'; if(q.work_request_id) head.work_request_id=q.work_request_id; }
   if(isNew && !head.entity_code) return msg('Choose the trading company.','err');
@@ -5727,7 +5740,8 @@ async function saveQuote(issue){
   if(issue){
     if(!lines.length) return msg('Add at least one line before issuing.','err');
     if(!head.valid_until || head.valid_until<ymd(new Date())) return msg('Set a “valid until” date (today or later) before issuing.','err');
-    if(!confirm(`Issue ${q.quote_ref} rev ${q.revision}? It will be locked; to change it later you would create a revision.`)) return;
+    if(el('qe_rams') && !el('qe_rams').value) return msg('Choose the RAMS template this job needs before issuing.','err');
+    if(!confirm(`Issue ${qRevName(q)}? It will be locked; to change it later you would create a revision.`)) return;
   }
   ['qeSave','qeIssue'].forEach(b=>{ const x=el(b); if(x) x.disabled=true; }); msg('Saving…');
   try{
@@ -5786,7 +5800,7 @@ function qPdfDoc(q, lines){
   if(addr) doc.text(doc.splitTextToSize(addr,R-L-56)[0],L+56,50);
   if(reg) doc.text(reg,L+56,62);
   y=112; doc.setTextColor(15,32,51); doc.setFont('helvetica','bold'); doc.setFontSize(20); doc.text('QUOTATION', L, y);
-  doc.setFontSize(11); doc.text(`${q.quote_ref}${q.revision>1?'  rev '+q.revision:''}`, R, y, {align:'right'});
+  doc.setFontSize(11); doc.text(`${q.quote_ref}${q.revision>1?'  Rev '+(q.revision-1):''}`, R, y, {align:'right'});
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(90,107,128);
   doc.text(`Date: ${jobDate((q.issued_at||new Date().toISOString()).slice(0,10))}    Valid until: ${jobDate(q.valid_until)}`, R, y+15, {align:'right'});
   y+=40;
@@ -5819,7 +5833,7 @@ function qPdfDoc(q, lines){
   block('Terms', q.terms);
   doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(140,150,165);
   const pages=doc.getNumberOfPages();
-  for(let p=1;p<=pages;p++){ doc.setPage(p); doc.text(`${q.quote_ref}${q.revision>1?' rev '+q.revision:''} · page ${p} of ${pages}`, W/2, H-24, {align:'center'}); }
+  for(let p=1;p<=pages;p++){ doc.setPage(p); doc.text(`${q.quote_ref}${q.revision>1?' Rev '+(q.revision-1):''} · page ${p} of ${pages}`, W/2, H-24, {align:'center'}); }
   return doc;
 }
 async function qLinesForPdf(id){
@@ -5838,7 +5852,7 @@ async function qMakeAndStorePdf(q){
 async function qPreviewPdf(){
   if(!window.jspdf){ alert('PDF tool still loading — try again in a moment.'); return; }
   const w=window.open('about:blank','_blank');
-  try{ const q=QEDIT.q; const doc=qPdfDoc(q, await qLinesForPdf(q.id)); qShowPdf(doc, `${q.quote_ref}-rev${q.revision}-DRAFT.pdf`, w); }
+  try{ const q=QEDIT.q; const doc=qPdfDoc(q, await qLinesForPdf(q.id)); qShowPdf(doc, `${qRevFile(q)}-DRAFT.pdf`, w); }
   catch(e){ if(w) w.close(); alert('Could not build the PDF: '+(e.message||e)); }
 }
 async function qDownloadPdf(path){
@@ -5850,7 +5864,7 @@ async function qDownloadPdf(path){
   }
   // no stored copy: rebuild from the quote as it stands
   if(!window.jspdf){ if(w) w.close(); alert('PDF tool still loading — try again in a moment.'); return; }
-  try{ const doc=qPdfDoc(q, await qLinesForPdf(q.id)); qShowPdf(doc, `${q.quote_ref}-rev${q.revision}.pdf`, w); }
+  try{ const doc=qPdfDoc(q, await qLinesForPdf(q.id)); qShowPdf(doc, `${qRevFile(q)}.pdf`, w); }
   catch(e){ if(w) w.close(); alert('Could not build the PDF: '+(e.message||e)); }
 }
 function qShowVersion(rev){
@@ -5858,7 +5872,7 @@ function qShowVersion(rev){
   const s=v.snapshot||{}, q=s.quote||{};
   if(q.pdf_path) return qDownloadPdf(q.pdf_path);
   if(!window.jspdf){ alert('PDF tool still loading.'); return; }
-  qShowPdf(qPdfDoc(q, s.lines||[]), `${q.quote_ref}-rev${rev}.pdf`, window.open('about:blank','_blank'));
+  qShowPdf(qPdfDoc(q, s.lines||[]), `${qRevFile(q,rev)}.pdf`, window.open('about:blank','_blank'));
 }
 
 // Show a built PDF in its own tab (falls back to a download if the browser blocks the tab)
@@ -5878,11 +5892,11 @@ async function qUpdate(patch, okText){
 }
 async function qRevise(){
   const q=QEDIT.q;
-  if(!confirm(`Create revision ${q.revision+1} of ${q.quote_ref}? The current version (rev ${q.revision}) is kept and the quote reopens for editing.`)) return;
+  if(!confirm(`Create ${qRevName(q,q.revision+1)}? The current version (${qRevName(q)}) is kept and the quote reopens for editing.`)) return;
   const r=await sb.rpc('revise_quote',{p_quote:q.id});
   if(r.error){ msg('Not revised: '+r.error.message,'err'); return; }
   const f=await sb.from('quotes').select('*').eq('id',q.id).single(); if(!f.error) qStore(f.data);
-  await openQuote(q.id); msg(`✓ Now on rev ${r.data}. Edit and issue again.`,'ok');
+  await openQuote(q.id); msg(`✓ Now ${qRevName(q,r.data)}. Edit and issue it again.`,'ok');
   if(CURRENT==='quotereg'){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); }
 }
 /* ---------- lead → quote, lost, owner/notes ---------- */
@@ -5996,7 +6010,7 @@ async function qConvertFromList(id){ await openQuote(id); qConvertForm(); }
 function qConvertForm(){
   const q=QEDIT.q; closeForm();
   const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
-  wrap.innerHTML=`<div class="modal" style="max-width:620px"><div class="modal-h"><h3>Convert to job · ${esc(q.quote_ref)}${q.revision>1?' rev '+q.revision:''}</h3><button class="modal-x" onclick="closeForm();openQuote('${q.id}')">✕</button></div>
+  wrap.innerHTML=`<div class="modal" style="max-width:620px"><div class="modal-h"><h3>Convert to job · ${esc(qRevName(q))}</h3><button class="modal-x" onclick="closeForm();openQuote('${q.id}')">✕</button></div>
     <div class="modal-b">
       <div class="box" style="background:var(--panel2);border:1px dashed var(--line2);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:12px">
         Job <b>${esc(q.quote_ref)}</b> will be created for <b>${esc(jobClientName(q.client_id))}</b> with a contract value of <b>${jobMoney(q.total_sell,q.currency)}</b> (excl. VAT). The quote’s costs become the job’s original budget, which is then locked, and its attachments come with it. This can’t be undone.</div>
@@ -6057,6 +6071,61 @@ async function qHistory(){
     <div class="modal-foot"><button class="btn-ghost" onclick="closeForm();openQuote('${q.id}')">Back to quote</button></div></div>`;
   document.body.appendChild(wrap);
 }
+
+/* ---------- several quotes at once: mark as lost / archive ---------- */
+let QSEL=new Set();
+function qBulkLostOk(x){ return !x.job_id && !x.archived_at && ['lead','issued','expired'].includes(x.status); }
+function qBulkArchOk(x){ return !x.job_id && !x.archived_at && x.status!=='accepted'; }
+function qBulkOk(x){ return qBulkLostOk(x)||qBulkArchOk(x); }
+function qBulkSel(){ return (QUOTES||[]).filter(x=>QSEL.has(x.id)); }
+function qBulkBar(){
+  const sel=qBulkSel(); if(!sel.length) return '';
+  const nl=sel.filter(qBulkLostOk).length, na=sel.filter(qBulkArchOk).length;
+  return `<div class="card" id="qBulkBar" style="padding:10px 14px;margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-left:3px solid var(--cyan)">
+    <div style="flex:1"><b>${sel.length}</b> selected</div>
+    <button class="btn-ghost" style="color:var(--red)" ${nl?'':'disabled'} onclick="qBulkLostForm()">Mark as lost${nl<sel.length?` (${nl})`:''}</button>
+    <button class="btn-ghost" ${na?'':'disabled'} onclick="qBulkArchive()">Archive${na<sel.length?` (${na})`:''}</button>
+    <button class="btn-ghost" onclick="QSEL.clear();qBulkRedraw()">Clear</button></div>`;
+}
+function qBulkRedraw(){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); else go('quotereg'); }
+function qBulkTick(id,on){ on?QSEL.add(id):QSEL.delete(id); qBulkRedraw(); }
+function qBulkAll(on){ quoteFiltered().filter(qBulkOk).forEach(x=>on?QSEL.add(x.id):QSEL.delete(x.id)); qBulkRedraw(); }
+function qBulkLostForm(){
+  const sel=qBulkSel().filter(qBulkLostOk), skip=qBulkSel().length-sel.length;
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:540px"><div class="modal-h"><h3>Mark ${sel.length} quote${sel.length===1?'':'s'} as lost</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div style="font-size:12.5px;margin-bottom:10px">${sel.map(x=>`<span class="chip grey" style="margin:2px">${esc(x.quote_ref||x.lead_ref)}</span>`).join('')}${skip?`<div class="muted" style="margin-top:6px">${skip} other selected quote${skip===1?' is':'s are'} being prepared and can’t be marked as lost; ${skip===1?'it':'they'} will be left as ${skip===1?'it is':'they are'}.</div>`:''}</div>
+      <div class="fld"><label>Why were they lost? <span class="req">*</span></label><select id="qbl_reason"><option value="">— choose —</option>${LOST_REASONS.map(r=>`<option value="${r[0]}">${esc(r[1])}</option>`).join('')}</select></div>
+      <div class="fld"><label>Note <span class="muted" style="font-weight:500">(needed for “Other”)</span></label><textarea id="qbl_note" rows="2"></textarea></div>
+      <div class="muted" style="font-size:12px">The same reason is recorded on each quote. Lost quotes stay on record and can be revised later.</div></div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="qblGo" style="background:var(--red)" onclick="qBulkLostSave()">Mark ${sel.length} as lost</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function qBulkRun(list, patch, done){
+  let ok=0; const bad=[];
+  for(const x of list){
+    const r=await sb.from('quotes').update(typeof patch==='function'?patch(x):patch).eq('id',x.id).select();
+    if(r.error||!r.data||!r.data.length) bad.push(`${x.quote_ref||x.lead_ref}: ${r.error?r.error.message:'no permission'}`); else { qStore(r.data[0]); QSEL.delete(x.id); ok++; }
+  }
+  QSEL.clear(); closeForm(); qBulkRedraw();
+  setTimeout(()=>{ const t=el('quoteTable'); if(t) t.insertAdjacentHTML('beforebegin',`<div class="box" id="qBulkDone" style="background:${bad.length?'var(--amber-soft)':'var(--green-soft)'};border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px">✓ ${ok} ${done}.${bad.length?`<div style="margin-top:4px">Not changed: ${bad.map(esc).join('; ')}</div>`:''}</div>`); },50);
+}
+async function qBulkLostSave(){
+  const reason=el('qbl_reason').value, note=el('qbl_note').value.trim();
+  if(!reason) return msg('Choose why they were lost.','err');
+  if(reason==='other' && !note) return msg('Add a note saying why.','err');
+  el('qblGo').disabled=true; msg('Saving…');
+  await qBulkRun(qBulkSel().filter(qBulkLostOk), {status:'rejected', lost_reason:reason, rejected_reason:note||null}, 'marked as lost');
+}
+async function qBulkArchive(){
+  const list=qBulkSel().filter(qBulkArchOk);
+  const reason=prompt(`Archive ${list.length} quote${list.length===1?'':'s'} (${list.map(x=>x.quote_ref||x.lead_ref).join(', ')})? They leave the normal lists but are never deleted.\n\nReason:`);
+  if(reason===null) return; if(!reason.trim()) return alert('A reason is needed to archive.');
+  await qBulkRun(list, {archived_at:new Date().toISOString(), archive_reason:reason.trim()}, 'archived');
+}
+
 /* ===================================================================
    PURCHASING  —  Phase 3a. Purchase orders against jobs, supplier
    invoices entered against POs, other job costs (company card,
@@ -7425,9 +7494,11 @@ TITLES.xero='Send to Xero';
 const XO_TYPES=[['invoice','Customer invoices','Sent as draft sales invoices for you to approve in Xero'],
   ['purchase_order','Purchase orders','So accounts can see every PO in Xero'],
   ['bill','Supplier invoices → draft bills','Entered against POs; sent as draft bills'],
-  ['po_billed','POs to mark as Billed','Fully invoiced here; marks Xero’s copy as Billed']];
+  ['po_billed','POs to mark as Billed','Fully invoiced here; marks Xero’s copy as Billed'],
+  ['quote','Quotes','Every issued version, each as its own Xero quote: Q-UK-0014, Q-UK-0014 Rev 1, Rev 2 …'],
+  ['quote_status','Quotes won or lost','Marks the Xero quote Accepted or Declined']];
 const XO_STATUS={queued:['Queued','cyan'],sending:['Sending','cyan'],sent:['In Xero','green'],failed:['Failed','red'],withdrawn:['Taken back','grey'],in_xero:['Already in Xero','violet']};
-const xoKey=(t,id)=>t+'|'+id;
+const xoKey=(t,id,r)=>t+'|'+id+(r!=null?'|'+r:'');
 function xoUser(id){ const l=(LOGINS||[]).find(x=>x.id===id); return l?l.email:''; }
 function xoSettings(e){ return (XO&&XO.settings||[]).find(s=>s.entity_code===(e||XO_ENT))||{}; }
 function xoConnected(e){ return !!xoSettings(e).connected_at; }
@@ -7439,13 +7510,13 @@ async function loadXero(){
     if(!JOBREG_ENTITIES.length){ const e=await sb.from('trading_entities').select('*').order('code'); JOBREG_ENTITIES=e.data||[]; }
     const [outbox,items,links,settings,sups,codes]=await Promise.all([
       jobFetchAll(()=>sb.from('xero_outbox').select('*').order('item_date')),
-      jobFetchAll(()=>sb.from('xero_sync_items').select('id,entity_code,item_type,source_id,job_id,ref,party_name,amount,currency,status,queued_at,queued_by,sent_at,xero_id,xero_number,xero_kind,xero_status,origin,error,reason,closed_at,closed_by').order('queued_at',{ascending:false})),
+      jobFetchAll(()=>sb.from('xero_sync_items').select('id,entity_code,item_type,source_id,job_id,ref,party_name,amount,currency,status,queued_at,queued_by,sent_at,xero_number,error,reason,closed_at,closed_by').order('queued_at',{ascending:false})),
       jobFetchAll(()=>sb.from('xero_contact_links').select('*')),
       sb.from('xero_settings').select('*').order('entity_code').then(r=>{ if(r.error) throw r.error; return r.data||[]; }),
       jobFetchAll(()=>sb.from('suppliers').select('id,name,status').order('name')),
       sb.from('cost_codes').select('*').order('sort_order').then(r=>r.data||[])]);
     XO={outbox,items,links,settings,sups,codes};
-    const live=new Set(outbox.map(o=>xoKey(o.item_type,o.source_id))); XO_SEL=new Set([...XO_SEL].filter(k=>live.has(k)));
+    const live=new Set(outbox.map(o=>xoKey(o.item_type,o.source_id,o.source_rev))); XO_SEL=new Set([...XO_SEL].filter(k=>live.has(k)));
   }catch(e){ XO_ERR=e.message||String(e); XO=null; }
   XO_LOADING=false;
   if(CURRENT==='xero') go('xero');
@@ -7453,7 +7524,6 @@ async function loadXero(){
 function xoReload(){ XO=null; XO_SEL.clear(); go('xero'); }
 
 function pageXero(){
-  xoCheckReturn();
   if(PROFILE.role!=='admin') return emptyState('🔒','Mercury staff only','Only visible to the Mercury team.');
   if(MYPERMS!==null && !jobCan('xero.send') && !jobCan('xero.settings')) return emptyState('🔒','Accounts only','You don’t have permission to send to Xero.');
   if(XO===null){ if(XO_ERR) return emptyState('⚠','Could not load', esc(XO_ERR)+`<div style="margin-top:10px"><button class="btn-ghost" onclick="XO_ERR=null;xoReload()">Try again</button></div>`); loadXero(); return emptyState('⏳','Loading…','One moment.'); }
@@ -7461,9 +7531,8 @@ function pageXero(){
   const conn=on.length?on.map(s=>s.connected_at?`<span class="chip green">${esc(s.entity_code)}: connected${s.tenant_name?' to '+esc(s.tenant_name):''}</span>`:`<span class="chip amber" title="Someone with admin access to this Xero organisation needs to approve the connection">${esc(s.entity_code)}: not connected yet</span>`).join(' '):'<span class="chip grey">No company switched on</span>';
   const queued=XO.items.filter(i=>['queued','sending','failed'].includes(i.status)).length;
   const tab=(k,l,n)=>`<button class="${XO_TAB===k?'btn':'btn-ghost'}" style="width:auto;padding:7px 14px" onclick="XO_TAB='${k}';go('xero')">${l}${n?` <span class="nav-badge" style="position:static;margin-left:4px">${n}</span>`:''}</button>`;
-  const anyConn=on.some(s=>s.connected_at);
-  const head=`<div class="sechead"><h3>🔄 Send to Xero</h3><span class="sub">Check each item, tick it, then send. Nothing goes to Xero automatically.</span><span class="line"></span>${jobCan('xero.send')&&anyConn?`<button class="btn-ghost" ${XO_RUNNING?'disabled':''} onclick="xoRun('sync',{},'Check Xero now for payments, deletions, amount changes and credit notes?')" title="Also runs automatically every night">Check Xero now</button>`:''}<button class="btn-ghost" onclick="xoReload()">Refresh</button></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${conn}</div>${xoNoticeHtml()}${xoResultHtml()}
+  const head=`<div class="sechead"><h3>🔄 Send to Xero</h3><span class="sub">Check each item, tick it, then send. Nothing goes to Xero automatically.</span><span class="line"></span><button class="btn-ghost" onclick="xoReload()">Refresh</button></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${conn}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${tab('check','To check',XO.outbox.length)}${tab('queue','Queued',queued)}${tab('done','Sent & history')}${tab('contacts','Xero contacts')}${tab('settings','Settings')}</div>`;
   let body='';
   if(XO_TAB==='check') body=xoCheckHtml(); else if(XO_TAB==='queue') body=xoQueueHtml(false);
@@ -7473,20 +7542,20 @@ function pageXero(){
 
 /* ---------- To check ---------- */
 function xoCheckHtml(){
-  if(!XO.outbox.length) return `<div class="card" style="padding:18px">${emptyState('✅','Nothing waiting','New POs, supplier invoices and billing stages marked ready will appear here.')}</div>`;
+  if(!XO.outbox.length) return `<div class="card" style="padding:18px">${emptyState('✅','Nothing waiting','Issued quotes, new POs, supplier invoices and billing stages marked ready will appear here.')}</div>`;
   const can=jobCan('xero.send');
   const sec=XO_TYPES.map(([t,title,sub])=>{
     const rows=XO.outbox.filter(o=>o.item_type===t); if(!rows.length) return '';
     const sendable=rows.filter(o=>o.can_send);
-    const allOn=sendable.length&&sendable.every(o=>XO_SEL.has(xoKey(o.item_type,o.source_id)));
-    const tr=rows.map(o=>{ const k=xoKey(o.item_type,o.source_id), probs=o.problems||[], warns=o.warnings||[];
+    const allOn=sendable.length&&sendable.every(o=>XO_SEL.has(xoKey(o.item_type,o.source_id,o.source_rev)));
+    const tr=rows.map(o=>{ const k=xoKey(o.item_type,o.source_id,o.source_rev), probs=o.problems||[], warns=o.warnings||[];
       const link=probs.some(p=>/not linked to a Xero contact/.test(p))&&can?` <button class="btn-ghost" style="padding:2px 8px;font-size:12px" onclick="xoLinkForm('${o.entity_code}','${o.party_type}','${o.party_id}')">Link…</button>`:'';
       return `<tr style="${o.can_send?'':'background:var(--red-soft)'}"><td style="width:28px">${can?`<input type="checkbox" class="xo_chk" style="width:auto" data-k="${k}" ${o.can_send?'':'disabled'} ${XO_SEL.has(k)?'checked':''} onchange="xoTick(this)">`:''}</td>
         <td style="white-space:nowrap"><b>${esc(o.ref)}</b><div class="muted" style="font-size:11.5px">${esc(o.job_ref||'')} · ${esc(o.entity_code)}</div></td>
         <td>${esc(o.party_name||'—')}<div class="muted" style="font-size:11.5px">${o.xero_contact?'Xero: '+esc(o.xero_contact):''}</div></td>
         <td>${jobDate(o.item_date)}</td><td style="text-align:right;white-space:nowrap">${t==='po_billed'?'':jobMoney(o.amount,o.currency)}</td>
         <td style="font-size:12px">${probs.map(p=>`<div style="color:var(--red)">✕ ${esc(p)}</div>`).join('')}${link}${warns.map(w=>`<div style="color:var(--amber)">! ${esc(w)}</div>`).join('')}</td>
-        <td style="white-space:nowrap;text-align:right"><button class="btn-ghost" style="padding:4px 8px" onclick="xoPreview('${t}','${o.source_id}')">View</button>${can?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoMarkInXero('${t}','${o.source_id}','${esc(o.ref).replace(/'/g,'')}')">Already in Xero</button>`:''}</td></tr>`; }).join('');
+        <td style="white-space:nowrap;text-align:right"><button class="btn-ghost" style="padding:4px 8px" onclick="xoPreview('${t}','${o.source_id}',${o.source_rev==null?'null':o.source_rev})">View</button>${can?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoMarkInXero('${t}','${o.source_id}','${esc(o.ref).replace(/'/g,'')}',${o.source_rev==null?'null':o.source_rev})">Already in Xero</button>`:''}</td></tr>`; }).join('');
     return `<div class="card" style="padding:10px 12px;margin-bottom:14px;overflow-x:auto"><div style="display:flex;gap:10px;align-items:center;margin-bottom:6px"><div style="flex:1"><b>${title}</b> <span class="muted" style="font-size:12px">· ${sub}</span></div>
         ${can&&sendable.length?`<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" style="width:auto" ${allOn?'checked':''} onchange="xoTickAll('${t}',this.checked)"> Tick all ready (${sendable.length})</label>`:''}</div>
       <table class="tbl xo_tbl" data-type="${t}"><thead><tr><th></th><th>Reference</th><th>Contact</th><th>Date</th><th style="text-align:right">Net</th><th>Checks</th><th></th></tr></thead><tbody>${tr}</tbody></table></div>`; }).join('');
@@ -7497,33 +7566,32 @@ function xoCheckHtml(){
 }
 function xoTick(cb){ cb.checked?XO_SEL.add(cb.dataset.k):XO_SEL.delete(cb.dataset.k); const n=XO_SEL.size;
   el('xoSelText').innerHTML=n?`<b>${n}</b> item${n===1?'':'s'} ticked`:'Tick the items you have checked.'; el('xoReview').disabled=!n; }
-function xoTickAll(t,on){ XO.outbox.filter(o=>o.item_type===t&&o.can_send).forEach(o=>{ const k=xoKey(t,o.source_id); on?XO_SEL.add(k):XO_SEL.delete(k); }); go('xero'); }
+function xoTickAll(t,on){ XO.outbox.filter(o=>o.item_type===t&&o.can_send).forEach(o=>{ const k=xoKey(t,o.source_id,o.source_rev); on?XO_SEL.add(k):XO_SEL.delete(k); }); go('xero'); }
 
-async function xoPreview(t,id){
-  const r=await sb.rpc('xero_item_preview',{p_type:t,p_id:id});
+async function xoPreview(t,id,rev){
+  const r=await sb.rpc('xero_item_preview',{p_type:t,p_id:id,p_rev:rev==null?null:rev});
   if(r.error){ alert('Could not load: '+poFriendlyError(r.error)); return; }
   const k=r.data, p=k.payload||{}, cur=k.currency, lines=p.LineItems||[];
   const row=(l,v)=>v==null||v===''?'':`<tr><td class="muted" style="width:170px">${l}</td><td>${esc(String(v))}</td></tr>`;
-  const neg=Number(k.amount)<0 && (t==='invoice'||t==='bill');
-  const kind=neg?(t==='invoice'?'Draft credit note':'Draft supplier credit note'):{invoice:'Draft sales invoice',purchase_order:'Purchase order',bill:'Draft bill',po_billed:'Mark PO as Billed'}[t];
+  const kind={invoice:'Draft sales invoice',purchase_order:'Purchase order',bill:'Draft bill',po_billed:'Mark PO as Billed',quote:'Quote',quote_status:'Quote status'}[t];
   const tot=lines.reduce((a,l)=>a+Number(l.Quantity||1)*Number(l.UnitAmount||0),0);
   billModal('xoPrev',`${kind} · ${esc(k.ref)}`,
     `${(k.problems||[]).map(x=>`<div style="color:var(--red);font-size:13px">✕ ${esc(x)}</div>`).join('')}${(k.warnings||[]).map(x=>`<div style="color:var(--amber);font-size:13px">! ${esc(x)}</div>`).join('')}
-     <table class="tbl" style="margin:8px 0">${row('Xero contact',p.Contact?(p.Contact.Name||'')+(p.Contact.ContactID?'':(k.xero_contact==='(new contact)'?' (new)':'')):'')}${row('Number',p.InvoiceNumber||p.PurchaseOrderNumber)}${row('Date',p.Date&&jobDate(p.Date))}${row('Due date',p.DueDate&&jobDate(p.DueDate))}${row('Delivery date',p.DeliveryDate&&jobDate(p.DeliveryDate))}${row('Reference',p.Reference)}${row('Currency',p.CurrencyCode)}${row('Status in Xero',p.Status)}${row('Amounts are','excluding VAT — Xero adds VAT from the tax rate')}</table>
+     <table class="tbl" style="margin:8px 0">${row('Xero contact',p.Contact?(p.Contact.Name||'')+(p.Contact.ContactID?'':(k.xero_contact==='(new contact)'?' (new)':'')):'')}${row('Number',p.InvoiceNumber||p.PurchaseOrderNumber||p.QuoteNumber)}${row('Title',p.Title)}${row('Date',p.Date&&jobDate(p.Date))}${row('Expires',p.ExpiryDate&&jobDate(p.ExpiryDate))}${row('Due date',p.DueDate&&jobDate(p.DueDate))}${row('Delivery date',p.DeliveryDate&&jobDate(p.DeliveryDate))}${row('Reference',p.Reference)}${row('Currency',p.CurrencyCode)}${row('Status in Xero',p.Status)}${row('Amounts are','excluding VAT — Xero adds VAT from the tax rate')}</table>
      ${lines.length?`<table class="tbl"><thead><tr><th>Description</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit</th><th>Account</th><th>Tax rate</th></tr></thead><tbody>${lines.map(l=>`<tr><td style="white-space:pre-line">${esc(l.Description)}</td><td style="text-align:right">${esc(l.Quantity)}</td><td style="text-align:right">${jobMoney(l.UnitAmount,cur)}</td><td>${esc(l.AccountCode||'')}</td><td>${esc(l.TaxType||'')}${l.Tracking?'<div class="muted" style="font-size:11px">'+esc(l.Tracking.map(x=>x.Name+': '+x.Option).join(', '))+'</div>':''}</td></tr>`).join('')}
        <tr><td colspan="2"><b>Net total</b></td><td style="text-align:right"><b>${jobMoney(tot,cur)}</b></td><td colspan="2"></td></tr></tbody></table>`:''}`,
     `<button class="btn-ghost" onclick="el('xoPrev').remove()">Close</button>`, 760);
 }
-async function xoMarkInXero(t,id,ref){
+async function xoMarkInXero(t,id,ref,rev){
   const reason=prompt(`Take ${ref} off the list because it is already in Xero (keyed in by hand)?\n\nNote (e.g. "entered by hand on 18/11"):`); if(reason===null) return;
   if(!reason.trim()){ alert('A note is needed.'); return; }
   const no=prompt('Xero number, if you have it (optional):','');
-  const r=await sb.rpc('xero_mark_in_xero',{p_type:t,p_id:id,p_reason:reason.trim(),p_xero_number:no||null});
+  const r=await sb.rpc('xero_mark_in_xero',{p_type:t,p_id:id,p_reason:reason.trim(),p_xero_number:no||null,p_rev:rev==null?null:rev});
   if(r.error){ alert('Not saved: '+poFriendlyError(r.error)); return; }
   xoReload();
 }
 function xoReview(){
-  const sel=XO.outbox.filter(o=>XO_SEL.has(xoKey(o.item_type,o.source_id)));
+  const sel=XO.outbox.filter(o=>XO_SEL.has(xoKey(o.item_type,o.source_id,o.source_rev)));
   const by=XO_TYPES.map(([t,title])=>{ const r=sel.filter(o=>o.item_type===t); if(!r.length) return '';
     return `<div style="margin-bottom:10px"><b>${title}</b> — ${r.length} · ${t==='po_billed'?'':sumByCur(r,'amount')}<div style="font-size:12.5px">${r.map(o=>`<div>${esc(o.ref)} · ${esc(o.party_name||'')}${t==='po_billed'?'':' · '+jobMoney(o.amount,o.currency)}${(o.warnings||[]).length?' <span style="color:var(--amber)">('+(o.warnings||[]).length+' warning'+((o.warnings||[]).length>1?'s':'')+')</span>':''}</div>`).join('')}</div></div>`; }).join('');
   const notConn=[...new Set(sel.map(o=>o.entity_code))].filter(e=>!xoConnected(e));
@@ -7533,7 +7601,7 @@ function xoReview(){
     `<button class="btn-ghost" onclick="el('xoSend').remove()">Cancel</button><button class="btn" id="xoGo" disabled onclick="xoSendNow()">Send</button>`, 640);
 }
 async function xoSendNow(){
-  const items=XO.outbox.filter(o=>XO_SEL.has(xoKey(o.item_type,o.source_id))).map(o=>({type:o.item_type,id:o.source_id}));
+  const items=XO.outbox.filter(o=>XO_SEL.has(xoKey(o.item_type,o.source_id,o.source_rev))).map(o=>({type:o.item_type,id:o.source_id,rev:o.source_rev}));
   el('xoGo').disabled=true; billSay('xoSend','Sending…');
   const r=await sb.rpc('xero_queue',{p_items:items});
   if(r.error){ el('xoGo').disabled=false; return billSay('xoSend','Not sent: '+poFriendlyError(r.error)); }
@@ -7543,93 +7611,16 @@ async function xoSendNow(){
 /* ---------- Queue and history ---------- */
 function xoQueueHtml(history){
   const rows=XO.items.filter(i=>history?['sent','withdrawn','in_xero'].includes(i.status):['queued','sending','failed'].includes(i.status));
-  const top=history?'':xoSendNowHtml();
-  if(!rows.length) return top+`<div class="card" style="padding:18px">${emptyState(history?'🗂':'📭',history?'Nothing yet':'Queue is empty',history?'Items sent to Xero, taken back or marked as already in Xero appear here.':'Ticked items wait here until they are sent.')}</div>`;
+  if(!rows.length) return `<div class="card" style="padding:18px">${emptyState(history?'🗂':'📭',history?'Nothing yet':'Queue is empty',history?'Items sent to Xero, taken back or marked as already in Xero appear here.':'Ticked items wait here until they are sent.')}</div>`;
   const type=t=>(XO_TYPES.find(x=>x[0]===t)||[t,t])[1];
   const can=jobCan('xero.send');
-  return top+`<div class="card" style="padding:8px 10px;overflow-x:auto"><table class="tbl"><thead><tr><th>Reference</th><th>Type</th><th>Contact</th><th style="text-align:right">Net</th><th>Status</th><th>Who / when</th><th></th></tr></thead><tbody>${rows.map(i=>{
+  return `<div class="card" style="padding:8px 10px;overflow-x:auto"><table class="tbl"><thead><tr><th>Reference</th><th>Type</th><th>Contact</th><th style="text-align:right">Net</th><th>Status</th><th>Who / when</th><th></th></tr></thead><tbody>${rows.map(i=>{
       const s=XO_STATUS[i.status]||[i.status,'grey'];
       const wait=i.status==='queued'&&!xoConnected(i.entity_code)?'<div class="muted" style="font-size:11.5px">Waiting for the Xero connection</div>':'';
-      return `<tr><td><b>${esc(i.ref)}</b><div class="muted" style="font-size:11.5px">${esc(i.entity_code)}</div></td><td style="font-size:12.5px">${i.xero_kind==='credit_note'?(i.item_type==='bill'?'Supplier credit note':'Credit note'):esc(type(i.item_type))}${i.origin==='xero'?'<div class="muted" style="font-size:11px">raised in Xero</div>':''}</td><td>${esc(i.party_name||'')}</td>
-        <td style="text-align:right">${i.item_type==='po_billed'?'':jobMoney(i.amount,i.currency)}</td><td><span class="chip ${s[1]}">${s[0]}</span>${wait}${i.xero_number?`<div style="font-size:12px">Xero ${esc(i.xero_number)}${i.xero_status&&i.status!=='withdrawn'?' · '+esc(XO_XSTATUS[i.xero_status]||i.xero_status):''}</div>`:''}${i.error?`<div style="color:var(--red);font-size:12px">${esc(i.error)}</div>`:''}${i.reason?`<div class="muted" style="font-size:12px">${esc(i.reason)}</div>`:''}</td>
+      return `<tr><td><b>${esc(i.ref)}</b><div class="muted" style="font-size:11.5px">${esc(i.entity_code)}</div></td><td style="font-size:12.5px">${esc(type(i.item_type))}</td><td>${esc(i.party_name||'')}</td>
+        <td style="text-align:right">${i.item_type==='po_billed'?'':jobMoney(i.amount,i.currency)}</td><td><span class="chip ${s[1]}">${s[0]}</span>${wait}${i.xero_number?`<div style="font-size:12px">Xero ${esc(i.xero_number)}</div>`:''}${i.error?`<div style="color:var(--red);font-size:12px">${esc(i.error)}</div>`:''}${i.reason?`<div class="muted" style="font-size:12px">${esc(i.reason)}</div>`:''}</td>
         <td style="font-size:12px">${esc(xoUser(i.queued_by))}<div class="muted">${jobDate(i.queued_at)}${i.closed_at?' → '+jobDate(i.closed_at)+' '+esc(xoUser(i.closed_by)):''}</div></td>
-        <td style="white-space:nowrap">${can&&['sent','in_xero'].includes(i.status)&&i.xero_id&&['invoice','bill'].includes(i.item_type)&&!['AUTHORISED','PAID'].includes(i.xero_status)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoCancel('${i.id}','${esc(i.ref).replace(/'/g,'')}')">Cancel in Xero</button>`:''}${can&&['queued','failed'].includes(i.status)||(can&&i.status==='in_xero'&&!i.xero_id)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoWithdraw('${i.id}','${i.status}')">${i.status==='in_xero'?'Undo':'Take back'}</button>`:''}</td></tr>`; }).join('')}</tbody></table></div>`;
-}
-/* ---------- Send now / Check Xero / Cancel in Xero (Phase 5b–5c) ----------
-   All run the "xero-sender" back-room function:
-     send   – delivers every queued item to Xero (drafts; negatives as credit notes)
-     sync   – picks up changes made in Xero (also runs every night at 02:20)
-     cancel – deletes a draft in Xero and puts it back in Mercury to resend
-   Accounts only (xero.send). Connect/Disconnect use "xero-auth" (Directors). */
-let XO_RUN=null, XO_RUNNING=false, XO_NOTICE=null, XO_RETURN_DONE=false;
-const XO_XSTATUS={DRAFT:'Draft in Xero',SUBMITTED:'Awaiting approval',AUTHORISED:'Approved',PAID:'Paid',BILLED:'Billed',DELETED:'Deleted',VOIDED:'Voided'};
-function xoSendNowHtml(){
-  if(!jobCan('xero.send')) return '';
-  const waiting=XO.items.filter(i=>i.status==='queued').length;
-  return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <div style="flex:1;font-size:13px">${waiting?`<b>${waiting}</b> item${waiting===1?'':'s'} waiting to go to Xero.`:'Nothing waiting to go to Xero.'}</div>
-        <button class="btn" id="xoRunBtn" style="width:auto;padding:9px 22px" ${waiting&&!XO_RUNNING?'':'disabled'} onclick="xoRun('send',{},'Send ${waiting} queued item${waiting===1?'':'s'} to Xero now?')">${XO_RUNNING?'Working…':'Send now'}</button>
-      </div></div>`;
-}
-function xoResultHtml(){
-  if(!XO_RUN) return '';
-  const good=r=>/^(In Xero|Updated|Credit note added|Deleted in Xero|Taken back)/.test(r.result||'');
-  return `<div class="card" style="padding:10px 14px;margin-bottom:12px;font-size:13px">
-      <div style="display:flex;gap:8px;align-items:flex-start"><div style="flex:1;font-weight:700;color:${XO_RUN.ok?'var(--green)':'var(--amber)'}">${XO_RUN.ok?'✓':'!'} ${esc(XO_RUN.message||'')}</div>
-        <button class="btn-ghost" style="padding:2px 8px;font-size:12px" onclick="XO_RUN=null;go('xero')">Hide</button></div>
-      ${(XO_RUN.results||[]).map(r=>`<div style="font-size:12.5px;margin-top:3px">${good(r)?'<span style="color:var(--green)">✓</span>':(r.result==='Waiting'?'<span class="muted">•</span>':'<span style="color:var(--red)">✕</span>')} <b>${esc(r.ref||'')}</b> — ${esc(r.result||'')}${r.xeroNumber?' · Xero '+esc(r.xeroNumber):''}${r.reason?'<div class="muted" style="margin-left:16px">'+esc(r.reason)+'</div>':''}${(r.notes||[]).map(n=>'<div class="muted" style="margin-left:16px">'+esc(n)+'</div>').join('')}</div>`).join('')}
-    </div>`;
-}
-function xoNoticeHtml(){
-  if(!XO_NOTICE) return '';
-  return `<div class="box" style="background:${XO_NOTICE.ok?'var(--green-soft)':'var(--red-soft)'};border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13px;display:flex;gap:8px;align-items:center"><div style="flex:1">${esc(XO_NOTICE.text)}</div><button class="btn-ghost" style="padding:2px 8px;font-size:12px" onclick="XO_NOTICE=null;go('xero')">Hide</button></div>`;
-}
-/* Coming back from Xero's sign-in page (…?page=xero&xero=connected&entity=UK&org=…) */
-function xoCheckReturn(){
-  if(XO_RETURN_DONE) return; XO_RETURN_DONE=true;
-  try{
-    const q=new URLSearchParams(location.search);
-    if(!q.has('xero')&&!q.has('xero_error')) return;
-    const ent=q.get('entity')||'';
-    XO_NOTICE=q.has('xero_error')?{ok:false,text:`${ent} not connected: ${q.get('xero_error')}`}:{ok:true,text:`✓ ${ent} is now connected to Xero (${q.get('org')||'organisation'}).${/^demo company/i.test(q.get('org')||'')?' This is a test company, so only the TEST client’s items will be sent.':''}`};
-    XO_TAB='settings'; XO=null;
-    ['xero','xero_error','entity','org'].forEach(k=>q.delete(k));
-    const rest=q.toString(); history.replaceState(null,'',location.pathname+(rest?'?'+rest:''));
-  }catch(e){}
-}
-async function xoInvoke(fn,body){
-  try{
-    const r=await sb.functions.invoke(fn,{body});
-    if(r.error){
-      let d=null; try{ d=await r.error.context.json(); }catch(e){}
-      return d&&d.message?{ok:false,message:d.message,results:d.results||[]}:{ok:false,message:'Could not reach Xero: '+(r.error.message||String(r.error))};
-    }
-    return r.data||{ok:false,message:'No reply.'};
-  }catch(e){ return {ok:false,message:'Could not reach Xero: '+(e.message||String(e))}; }
-}
-async function xoRun(action,extra,question){
-  if(XO_RUNNING) return;
-  if(question && !confirm(question)) return;
-  XO_RUNNING=true; XO_RUN={ok:true,message:'Working… this can take up to a minute.'}; go('xero');
-  const out=await xoInvoke('xero-sender',{action,...(extra||{})});
-  XO_RUNNING=false; XO_RUN=out; XO=null; go('xero');
-}
-function xoCancel(id,ref){
-  const reason=prompt(`Cancel ${ref} in Xero?\n\nThis deletes the DRAFT in Xero and puts it back in Mercury so it can be corrected and sent again. It only works while it is still a draft (or awaiting approval) in Xero.\n\nReason:`);
-  if(reason===null) return; if(!reason.trim()){ alert('A reason is needed.'); return; }
-  xoRun('cancel',{itemId:id,reason:reason.trim()});
-}
-async function xoConnect(e){
-  if(!confirm(`Connect ${e} to Xero?\n\nYou'll be taken to Xero to sign in. The person signing in must be an admin of ${e}'s Xero organisation. Choose ONLY the ${e} organisation, then click Allow access. You'll come back here afterwards.`)) return;
-  const out=await xoInvoke('xero-auth',{action:'start',entity:e,returnUrl:location.origin+location.pathname+'?page=xero'});
-  if(out.ok&&out.url){ location.href=out.url; return; }
-  XO_NOTICE={ok:false,text:'Could not start the connection: '+(out.message||'unknown problem')}; go('xero');
-}
-async function xoDisconnect(e){
-  if(!confirm(`Disconnect ${e} from Xero?\n\nNothing already in Xero is changed. Queued items will wait until it is connected again.`)) return;
-  const out=await xoInvoke('xero-auth',{action:'disconnect',entity:e});
-  XO_NOTICE={ok:!!out.ok,text:out.message||(out.ok?'Disconnected.':'Not disconnected.')}; xoReload();
+        <td>${can&&['queued','failed','in_xero'].includes(i.status)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoWithdraw('${i.id}','${i.status}')">${i.status==='in_xero'?'Undo':'Take back'}</button>`:''}</td></tr>`; }).join('')}</tbody></table></div>`;
 }
 async function xoWithdraw(id,st){
   const reason=prompt(st==='in_xero'?'Put this item back on the check list?\n\nReason:':'Take this item back? It returns to the check list.\n\nReason:'); if(reason===null) return;
@@ -7689,9 +7680,7 @@ function xoSettingsHtml(){
   const cards=XO.settings.map(s=>`<div class="card" style="padding:12px 14px;margin-bottom:12px">
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px"><b style="flex:1">${ent(s.entity_code)}</b>
         <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="xs_${s.entity_code}_enabled" style="width:auto" ${s.enabled?'checked':''} ${dis}> Switched on</label></div>
-      <div style="font-size:12.5px;margin-bottom:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div style="flex:1">${s.connected_at?`<span class="chip green">Connected</span> to <b>${esc(s.tenant_name||'Xero')}</b> on ${jobDate(s.connected_at)}${s.connected_by?' by '+esc(xoUser(s.connected_by)):''}${/^demo company/i.test(s.tenant_name||'')?'<div class="muted">Test company — only the TEST client’s items are sent, and numbers are recorded with DEMO- in front.</div>':''}`:`<span class="chip amber">Not connected</span> ${s.tenant_name?'(was '+esc(s.tenant_name)+') ':''}— a Director clicks Connect to Xero, then someone with admin access to this company’s Xero organisation signs in and approves.`}
-          ${s.last_sync_at||s.last_sync_result?`<div class="muted" style="margin-top:3px">${s.last_sync_at?'Last checked with Xero '+jobDate(s.last_sync_at)+' · ':''}${esc(s.last_sync_result||'')}</div>`:''}</div>
-          ${ed?(s.connected_at?`<button class="btn-ghost" onclick="xoConnect('${s.entity_code}')">Reconnect</button><button class="btn-ghost" style="color:var(--red)" onclick="xoDisconnect('${s.entity_code}')">Disconnect</button>`:`<button class="btn" style="width:auto" onclick="xoConnect('${s.entity_code}')">Connect to Xero</button>`):''}</div>
+      <div style="font-size:12.5px;margin-bottom:8px">${s.connected_at?`Connected to <b>${esc(s.tenant_name||'Xero')}</b> on ${jobDate(s.connected_at)}`:'Not connected yet — the connection is approved by someone with admin access to this company’s Xero organisation.'}</div>
       <div class="frow">${f(s,'start_date','Send from (items before this date are not listed)','date')}${f(s,'tracking_category','Tracking category for the job ref (optional)','','e.g. Job')}</div>
       <div class="frow">${f(s,'sales_account_code','Sales account code','','e.g. 200')}${f(s,'sales_tax_type','Sales tax rate (Xero code)','','e.g. OUTPUT2')}${f(s,'invoice_due_days','Invoice due (days)','number')}</div>
       <div class="frow">${f(s,'purchases_account_code','Default purchases account code','','e.g. 310')}${f(s,'purchase_tax_type','Purchases tax rate (Xero code)','','e.g. INPUT2')}${f(s,'bill_due_days','Bill due (days)','number')}</div>
@@ -8425,7 +8414,7 @@ function clSitesHtml(){
       ${ed?`<button class="addbtn" onclick="clSiteForm()">＋ Add site</button>`:''}</div>
     <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl"><thead><tr><th>Site</th><th>Address</th><th style="text-align:right">Jobs</th><th style="text-align:right">Quotes</th><th style="text-align:right">Contacts</th><th></th></tr></thead><tbody>
     ${list.map(s=>`<tr${s.archived_at?' style="opacity:.55"':''}><td><b>${esc(clSiteName(s))}</b>${s.code&&s.name?`<div class="muted" style="font-size:11.5px">${esc(s.code)}</div>`:''}${s.archived_at?`<div class="muted" style="font-size:11.5px">Archived — ${esc(s.archive_reason||'')}</div>`:''}</td>
-      <td style="font-size:12.5px">${esc([s.address,s.city,s.country].filter(Boolean).join(', ')||'—')}</td>
+      <td style="font-size:12.5px">${esc([s.address,s.city,s.country].filter(Boolean).join(', ')||'—')}<div class="muted" style="font-size:11.5px">${s.nearest_ae?'A&amp;E: '+esc(s.nearest_ae):'<span style="color:var(--amber)">Nearest A&amp;E not set</span>'}</div></td>
       <td style="text-align:right">${jobsAt(s.id)||'—'}</td><td style="text-align:right">${qAt(s.id)||'—'}</td><td style="text-align:right">${cAt(s.id)||'—'}</td>
       <td style="text-align:right;white-space:nowrap">${ed?(s.archived_at?`<button class="btn-ghost" style="padding:4px 9px" onclick="clSiteRestore('${s.id}')">Restore</button>`:`<button class="btn-ghost" style="padding:4px 9px" onclick="clSiteForm('${s.id}')">Edit</button> <button class="btn-ghost" style="padding:4px 9px" onclick="clSiteArchive('${s.id}')">Archive</button>`):''}</td></tr>`).join('')
       || '<tr><td colspan="6" class="muted" style="padding:12px">No sites yet. Add one here, or create it on a quote.</td></tr>'}
@@ -8437,9 +8426,10 @@ function clSiteFields(s, p){
       <div class="fld"><label>Site code</label><input id="${p}_code" value="${esc(s.code||'')}" placeholder="e.g. DAV1 (optional)"></div></div>
     <div class="fld"><label>Address</label><input id="${p}_addr" value="${esc(s.address||'')}"></div>
     <div class="frow"><div class="fld"><label>Town / city</label><input id="${p}_city" value="${esc(s.city||'')}"></div>
-      <div class="fld"><label>Country</label><input id="${p}_country" value="${esc(s.country||'')}" placeholder="e.g. UK"></div></div>`;
+      <div class="fld"><label>Country</label><input id="${p}_country" value="${esc(s.country||'')}" placeholder="e.g. UK"></div></div>
+    <div class="fld"><label>Nearest A&amp;E (name and address) <span class="req">*</span></label><input id="${p}_ae" value="${esc(s.nearest_ae||'')}" placeholder="e.g. Leeds General Infirmary, Great George Street, Leeds LS1 3EX"><div class="muted" style="font-size:11.5px;margin-top:3px">Goes onto every RAMS for this site. Find it on the NHS website (Find urgent and emergency care services).</div></div>`;
 }
-function clSiteRow(p){ const v=k=>{ const e=el(p+'_'+k); return e?e.value.trim():''; }; return {name:v('name'), code:v('code')||null, address:v('addr')||null, city:v('city')||null, country:v('country')||null}; }
+function clSiteRow(p){ const v=k=>{ const e=el(p+'_'+k); return e?e.value.trim():''; }; return {name:v('name'), code:v('code')||null, address:v('addr')||null, city:v('city')||null, country:v('country')||null, nearest_ae:v('ae')||null}; }
 function clSiteForm(id){
   const s=id?CREC.d.sites.find(x=>x.id===id):null;
   const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
@@ -8451,6 +8441,7 @@ function clSiteForm(id){
 }
 async function clSiteSave(id){
   const row=clSiteRow('cs'); if(!row.name) return msg('Give the site a name.','err');
+  if(!row.nearest_ae) return msg('Enter the nearest A&E for this site.','err');
   el('csSave').disabled=true;
   const r=id?await sb.from('sites').update(row).eq('id',id).select().single():await sb.from('sites').insert({...row, client_id:CREC.id}).select().single();
   if(r.error){ el('csSave').disabled=false; return msg('Not saved: '+r.error.message,'err'); }
@@ -8691,6 +8682,7 @@ function qClientChanged(){ el('qe_site').innerHTML=jobSiteOptions(val('qe_client
 async function qAddSite(){
   const client=val('qe_client'); if(!client) return msg('Choose the client first.','err');
   const row=clSiteRow('qs'); if(!row.name) return msg('Give the new site a name.','err');
+  if(!row.nearest_ae) return msg('Enter the nearest A&E for the new site.','err');
   const r=await sb.from('sites').insert({...row, client_id:client}).select().single();
   if(r.error) return msg('Site not added: '+r.error.message,'err');
   JOBREG_SITES.push(r.data);
@@ -10692,6 +10684,517 @@ function supAssignJob(id){
 { const _osm=openSupManage; openSupManage=function(id){ if(CURRENT==='suprec'){ closeForm(); SREC.id=id; go('suprec'); return; } return _osm(id); }; }
 deleteSupplier=function(id){ openSupplierRecord(id); setTimeout(supArchive,50); };
 { const _esp=enterSupplierPreview; enterSupplierPreview=function(){ SUPP={pos:null, bookings:null, req:null, tab:'upcoming'}; return _esp.apply(this,arguments); }; }
+/* ===================================================================
+   HISTORY  —  release 20.
+   One readable history for quotes, jobs and POs: every change to the
+   record AND to its lines, stages, hours and so on, written out as
+   "Line 'Mesh guard panels': unit cost £100.00 → £150.00".
+   Quotes can go back to an earlier revision (as a new revision).
+   =================================================================== */
+
+const HIST_KIND={quotes:'Quote', quote_lines:'Line', jobs:'Job', purchase_orders:'PO', po_lines:'PO line', supplier_invoices:'Supplier invoice',
+  supplier_invoice_lines:'Invoice line', job_variations:'Variation', variation_lines:'Variation line', job_billing_stages:'Billing stage',
+  billing_stage_items:'Billed item', labour_entries:'Hours', job_other_costs:'Other cost', job_team:'Team', job_forecast_entries:'Forecast',
+  job_completions:'Completion', job_budget_lines:'Budget', commercial_attachments:'Attachment'};
+const HIST_FIELD={title:'Title', description:'Description', location:'Location', client_notes:'Notes for the client', internal_notes:'Internal notes',
+  terms:'Terms', valid_until:'Valid until', status:'Status', total_sell:'Quote total', revision:'Revision', client_id:'Client', site_id:'Site',
+  contact_name:'Client contact', contact_email:'Contact email', project_owner:'Project owner', follow_up_date:'Follow-up date', lost_reason:'Lost reason',
+  rejected_reason:'Reason', client_po_ref:'Client PO number', acceptance_method:'Accepted by', accepted_by_name:'Accepted by (client)', accepted_on:'Accepted on',
+  acceptance_note:'Acceptance note', archive_reason:'Archive reason', archived_at:'Archived', line_type:'Type', cost_code:'Cost code', quantity:'Quantity',
+  unit:'Unit', unit_cost:'Unit cost', pricing_basis:'Pricing', pricing_pct:'Markup / margin', unit_sell:'Unit price', line_cost:'Line cost', line_sell:'Line total',
+  line_total:'Line total', sort_order:'Position', supplier_id:'Supplier', required_by:'Required by', delivery_address:'Deliver to', supplier_notes:'Notes for the supplier',
+  currency:'Currency', total:'PO total', invoiced:'Invoiced', job_manager:'Project owner', start_date:'Start date', end_date:'End date', progress_pct:'Progress %',
+  contract_value:'Contract value', notes:'Notes', mobilisation:'Mobilisation checks', amount:'Amount', label:'Name', stage_type:'Type', planned_date:'Planned date',
+  xero_invoice_no:'Xero invoice', invoice_date:'Invoice date', invoiced_amount:'Invoiced amount', payment_status:'Payment', cancel_reason:'Cancel reason',
+  worker_id:'Person', work_date:'Date', hours:'Hours', ot_hours:'Overtime hours', cost_rate:'Cost rate', cost_amount:'Cost', chargeable:'Chargeable',
+  void_reason:'Void reason', cost:'Cost', sell:'Selling price', cost_total:'Cost total', sell_total:'Selling total', var_type:'Type', instructed_by:'Instructed by',
+  instructed_on:'Instructed on', at_risk:'At risk', approval_method:'Approved by', client_ref:'Client reference', approved_on:'Approved on', closed_reason:'Reason',
+  invoice_no:'Invoice number', net_amount:'Net', vat_amount:'VAT', note:'Note', role:'Role', remove_reason:'Reason', removed_at:'Removed',
+  supplier_ack_at:'Acknowledged by supplier', supplier_delivery_date:'Delivery date (supplier)', supplier_reply:'Supplier reply', on_hire_date:'On hire',
+  off_hire_date:'Off hire', off_hire_requested_for:'Off-hire requested for', restored_from_revision:'Copied from', cost_date:'Date', reference:'Reference',
+  supplier_name:'Supplier', source:'From', item_date:'Date', unit_price:'Unit price', entity_code:'Trading company', quote_ref:'Q number', job_ref:'Job number',
+  po_ref:'PO number', var_ref:'Variation number', lead_ref:'L number', doc_type:'Type', file_name:'File'};
+const HIST_MONEY=new Set(['total_sell','unit_cost','unit_sell','line_cost','line_sell','line_total','total','invoiced','contract_value','amount','invoiced_amount',
+  'cost_rate','cost_amount','cost','sell','cost_total','sell_total','net_amount','vat_amount','unit_price','final_value','final_cost_forecast']);
+const HIST_SKIP=new Set(['id','updated_at','created_at','created_by','archived_by','issued_by','issued_at','accepted_recorded_by','accepted_at','converted_by',
+  'converted_at','confirmed_by','confirmed_at','closed_by','closed_at','approved_recorded_by','approved_recorded_at','submitted_at','ready_at','invoiced_by',
+  'quote_id','po_id','job_id','variation_id','invoice_id','stage_id','po_line_id','pdf_path','worker_type','removed_by','storage_path','file_url','mime_type',
+  'size_bytes','reopened_by','completed_by','entered_by','xero_sync_status','off_hire_requested_at','stage_seq','var_seq','po_seq','source_id']);
+const HIST_STATUS={quotes:()=>typeof Q_STATUSES!=='undefined'?Q_STATUSES:[], jobs:()=>typeof JOB_STATUSES!=='undefined'?JOB_STATUSES:[],
+  purchase_orders:()=>typeof PO_STATUSES!=='undefined'?PO_STATUSES:[], job_billing_stages:()=>typeof BILL_STATUS!=='undefined'?BILL_STATUS:[],
+  job_variations:()=>typeof VAR_STATUS!=='undefined'?VAR_STATUS:[], labour_entries:()=>[['proposed','To confirm'],['confirmed','Confirmed'],['void','Void']]};
+const HIST_FIRST=['status','revision','restored_from_revision','description','title','label','quantity','unit','unit_cost','pricing_basis','pricing_pct','cost','sell','amount','hours','ot_hours'];
+const HIST_LAST=['unit_sell','line_cost','line_sell','line_total','cost_amount','total_sell','total','invoiced'];
+function histRank(k){ const i=HIST_FIRST.indexOf(k); if(i>=0) return i; const j=HIST_LAST.indexOf(k); return j>=0?100+j:50; }
+const HIST_DERIVED=new Set(['total_sell','total','invoiced','cost_total','sell_total']);
+const HIST_UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function histPerson(id){ const l=(LOGINS||[]).find(x=>x.id===id); return l?(l.full_name||l.email):null; }
+function histWho(h){ const l=(LOGINS||[]).find(x=>x.email&&x.email===h.user_email); return l&&l.full_name?l.full_name:(h.user_email||'System'); }
+function histName(field, v){
+  const f=(arr,key)=>{ const x=(arr||[]).find(r=>r.id===v); return x?x[key]:null; };
+  if(field==='client_id') return f(typeof CLIENTS!=='undefined'?CLIENTS:[],'name');
+  if(field==='site_id'){ const s=(JOBREG_SITES||[]).find(x=>x.id===v); return s?(s.name||s.code||s.city):null; }
+  if(field==='supplier_id') return f(typeof SUPPLIERS_ALL!=='undefined'&&SUPPLIERS_ALL.length?SUPPLIERS_ALL:(typeof SUPPLIERS!=='undefined'?SUPPLIERS:[]),'name');
+  if(field==='worker_id') return f(typeof WORKERS!=='undefined'?WORKERS:[],'full_name');
+  if(['project_owner','job_manager','user_id'].includes(field)) return histPerson(v);
+  return null;
+}
+function histVal(table, field, v, cur){
+  if(v===null||v===undefined||v==='') return '—';
+  if(field==='status'||field==='payment_status'){ const s=(HIST_STATUS[table]?HIST_STATUS[table]():[]).find(x=>x[0]===v); return s?s[1]:String(v).replace(/_/g,' '); }
+  if(HIST_MONEY.has(field)) return jobMoney(v,cur||'GBP');
+  if(field==='pricing_pct') return Number(v)+'%';
+  if(field==='pricing_basis') return {markup:'Markup %',margin:'Margin %',fixed:'Fixed price'}[v]||v;
+  if(field==='revision'||field==='restored_from_revision') return typeof qRevLabel==='function'?qRevLabel(v):'rev '+v;
+  if(field==='line_type'&&typeof LINE_TYPES!=='undefined'){ const t=LINE_TYPES.find(x=>x[0]===v); if(t) return t[1]; }
+  if(field==='mobilisation') return 'updated';
+  if(typeof v==='boolean') return v?'Yes':'No';
+  if(typeof v==='object') return Array.isArray(v)?`${v.length} item${v.length===1?'':'s'}`:'updated';
+  const s=String(v);
+  if(HIST_UUID.test(s)) return histName(field,s)||'another record';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return jobDate(s);
+  if(/^\d{4}-\d{2}-\d{2}T/.test(s)){ const d=new Date(s); return isNaN(d)?s:d.toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  if(['acceptance_method','approval_method'].includes(field)) return {purchase_order:'client PO',written_confirmation:'written confirmation'}[s]||s;
+  if(['lost_reason','stage_type','var_type','source','doc_type'].includes(field)) return s.replace(/_/g,' ');
+  return s.length>140?s.slice(0,140)+'…':s;
+}
+function histFieldName(f){ return HIST_FIELD[f]||f.replace(/_/g,' ').replace(/^./,c=>c.toUpperCase()); }
+/* one line of history in words */
+function histDescribe(h, ctx){
+  const kind=HIST_KIND[h.table_name]||h.table_name.replace(/_/g,' '), own=h.table_name===ctx.table&&h.record_id===ctx.id;
+  const name=h.record_label?` ‘${esc(h.record_label)}’`:'', cur=ctx.cur, row=h.changes||{};
+  const v=(f)=>esc(histVal(h.table_name,f,row[f],cur));
+  if(h.action==='insert'){
+    if(own) return `<b>${kind} created</b>`;
+    let extra='';
+    if(h.table_name==='quote_lines') extra=` — ${v('quantity')} ${esc(row.unit||'')} × ${v('unit_cost')}, ${row.pricing_basis==='fixed'?'fixed price':v('pricing_pct')+' '+row.pricing_basis} → ${v('line_sell')}`;
+    else if(h.table_name==='po_lines') extra=` — ${v('quantity')} ${esc(row.unit||'')} × ${v('unit_cost')} = ${v('line_total')}`;
+    else if(h.table_name==='variation_lines') extra=` — cost ${v('cost')}, selling ${v('sell')}`;
+    else if(['job_billing_stages','job_other_costs','supplier_invoice_lines','job_forecast_entries'].includes(h.table_name)) extra=` — ${v('amount')}`;
+    else if(h.table_name==='labour_entries') extra=` — ${v('hours')}h${Number(row.ot_hours)?` + ${v('ot_hours')}h overtime`:''}`;
+    else if(h.table_name==='supplier_invoices') extra=` — net ${v('net_amount')}`;
+    else if(h.table_name==='purchase_orders') extra=row.description?` — ${esc(row.description)}`:'';
+    return `<b>Added ${kind.toLowerCase()}</b>${name}${extra}`;
+  }
+  if(h.action==='delete') return `<b>Removed ${kind.toLowerCase()}</b>${name}`;
+  if(h.action==='archive') return `<b>${kind}${own?'':name} archived</b>${row.archive_reason&&row.archive_reason.to?': '+esc(row.archive_reason.to):''}`;
+  if(h.action==='restore') return `<b>${kind}${own?'':name} restored</b>`;
+  if(!row||typeof row!=='object'||Array.isArray(row)) return `<b>${kind}${own?'':name}</b> changed`;
+  const keys=Object.keys(row).filter(k=>!HIST_SKIP.has(k)&&row[k]&&typeof row[k]==='object'&&'from' in row[k])
+    .sort((a,b)=>histRank(a)-histRank(b));
+  if(!keys.length) return '';
+  const parts=keys.map(k=>{
+    if(k==='revision') return `revised: ${esc(histVal(h.table_name,k,row[k].from,cur))} → <b>${esc(histVal(h.table_name,k,row[k].to,cur))}</b>`;
+    if(k==='restored_from_revision') return row[k].to?`<b>copy of the ${esc(histVal(h.table_name,k,row[k].to,cur)).replace('Original','original')}</b>`:'';
+    return `${esc(histFieldName(k))}: ${esc(histVal(h.table_name,k,row[k].from,cur))} → <b>${esc(histVal(h.table_name,k,row[k].to,cur))}</b>`; }).filter(Boolean);
+  return `${own?'':`<b>${kind}${name}</b>: `}${parts.join('; ')}`;
+}
+/* load and draw the history of one quote / job / PO into a box */
+async function histRender(box, ctx){
+  if(!box) return;
+  if(!jobCan('history.view')){ box.innerHTML='<div class="muted">Your role cannot see change history.</div>'; return; }
+  box.innerHTML='<div class="muted">Loading history…</div>';
+  try{ if(!(LOGINS||[]).length) await loadLogins(); }catch(e){}
+  try{ if(typeof WORKERS!=='undefined'&&WORKERS===null&&jobCan('cost_rates.view')) await loadWorkers(); }catch(e){}
+  const r=await sb.rpc('record_history',{p_table:ctx.table, p_id:ctx.id});
+  if(r.error){ box.innerHTML=`<div class="muted">Could not load: ${esc(r.error.message)}</div>`; return; }
+  const raw=r.data||[];
+  // one row per save: the same person within a few seconds
+  const groups=[];
+  raw.forEach(h=>{ const g=groups[groups.length-1], t=new Date(h.changed_at).getTime();
+    if(g && g.who===h.user_email && Math.abs(g.t-t)<8000) g.hs.push(h); else groups.push({t, who:h.user_email, h, hs:[h]}); });
+  let n=0;
+  groups.forEach(g=>{
+    const hs=g.hs.slice().reverse();          // read each save in the order it happened
+    // totals that only moved because lines changed: show once, first value to last
+    const tot={}, rest=[];
+    hs.forEach(h=>{ const c=h.changes||{}, ks=h.action==='update'&&c&&typeof c==='object'&&!Array.isArray(c)?Object.keys(c).filter(k=>!HIST_SKIP.has(k)):[];
+      if(ks.length && ks.every(k=>HIST_DERIVED.has(k))){ ks.forEach(k=>{ const key=h.table_name+'|'+h.record_id+'|'+k; if(!tot[key]) tot[key]={h, k, from:c[k].from}; tot[key].to=c[k].to; }); }
+      else rest.push(h); });
+    g.items=rest.map(h=>histDescribe(h,ctx)).filter(Boolean);
+    Object.values(tot).forEach(x=>{ if(x.from===x.to) return; const own=x.h.table_name===ctx.table&&x.h.record_id===ctx.id;
+      g.items.push(`${own?'':`<b>${HIST_KIND[x.h.table_name]||''}${x.h.record_label?` ‘${esc(x.h.record_label)}’`:''}</b>: `}${esc(histFieldName(x.k))}: ${esc(histVal(x.h.table_name,x.k,x.from,ctx.cur))} → <b>${esc(histVal(x.h.table_name,x.k,x.to,ctx.cur))}</b>`); });
+    n+=g.items.length; });
+  const rows={length:n};
+  for(let i=groups.length-1;i>=0;i--) if(!groups[i].items.length) groups.splice(i,1);
+  ctx.groups=groups; HIST_CTX=ctx;
+  box.innerHTML=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input placeholder="Search the history (e.g. a line, a price, a name)…" oninput="histFilter(this.value)" style="flex:1">
+      <span class="muted" style="font-size:12px">${rows.length} change${rows.length===1?'':'s'}</span></div>
+    <div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tbl" id="histTable"><thead><tr><th style="width:150px">When</th><th style="width:150px">Who</th><th>What changed</th></tr></thead><tbody>${histRows(groups)}</tbody></table></div>`;
+}
+let HIST_CTX=null;
+function histRows(groups){
+  return groups.map(g=>`<tr><td style="white-space:nowrap;vertical-align:top">${new Date(g.t).toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
+    <td style="vertical-align:top">${esc(histWho(g.h))}</td><td style="font-size:12.5px">${g.items.map(i=>`<div style="padding:2px 0">${i}</div>`).join('')}</td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">No changes recorded.</td></tr>';
+}
+function histFilter(q){
+  if(!HIST_CTX) return; q=q.trim().toLowerCase(); const t=el('histTable'); if(!t) return;
+  const gs=!q?HIST_CTX.groups:HIST_CTX.groups.map(g=>({...g, items:g.items.filter(i=>i.replace(/<[^>]+>/g,'').toLowerCase().includes(q)||histWho(g.h).toLowerCase().includes(q))})).filter(g=>g.items.length);
+  t.querySelector('tbody').innerHTML=histRows(gs);
+}
+function histModal(title, back, ctx){
+  closeForm();
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:980px;width:96vw"><div class="modal-h"><h3>History · ${esc(title)}</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b" id="histBox"></div><div class="modal-foot"><button class="btn-ghost" onclick="${back}">${back.includes('PO')?'Back to PO':back.includes('Quote')?'Back to quote':'Back'}</button></div></div>`;
+  document.body.appendChild(wrap);
+  histRender(el('histBox'), ctx);
+}
+
+/* hook into the existing History buttons */
+qHistory=async function(){ const q=QEDIT.q; histModal(q.quote_ref||q.lead_ref||'Quote', `closeForm();openQuote('${q.id}')`, {table:'quotes', id:q.id, cur:q.currency}); };
+poHistory=async function(){ const p=PEDIT.p; histModal(p.po_ref||'PO', `closeForm();openPO('${p.id}')`, {table:'purchase_orders', id:p.id, cur:p.currency}); };
+jobLoadHistory=async function(j){ histRender(el('jobHist'), {table:'jobs', id:j.id, cur:j.currency}); };
+openJobHistory=async function(id){ const j=(JOBREG||[]).find(x=>x.id===id)||{}; histModal(j.job_ref||'Job', `closeForm();openJobForm('${id}')`, {table:'jobs', id, cur:j.currency}); };
+
+/* ---------- go back to an earlier quote revision ---------- */
+function qCanRestore(){
+  const q=QEDIT&&QEDIT.q; if(!q||!q.id||q.job_id||q.archived_at||!q.quote_ref||q.status==='lead') return false;
+  if(!jobCan('quotes.create')) return false;
+  if(q.status==='accepted' && !jobCan('quotes.approve')) return false;
+  return (QEDIT.versions||[]).length>0;
+}
+async function qRestoreVersion(rev){
+  const q=QEDIT.q;
+  const old=qRevName(q,rev), next=qRevName(q,q.revision+1);
+  if(!confirm(`Go back to ${old}?\n\nA new revision (${next}) is created as a copy of ${old}: its lines, prices and printed text. The current version (${qRevName(q)}) is kept in the history.\n\nCheck it, then issue it to the client again.`)) return;
+  const r=await sb.rpc('restore_quote_revision',{p_quote:q.id, p_revision:rev});
+  if(r.error){ msg('Not done: '+r.error.message,'err'); return; }
+  const f=await sb.from('quotes').select('*').eq('id',q.id).single(); if(!f.error) qStore(f.data);
+  await openQuote(q.id); msg(`✓ Now ${qRevName(q,r.data)}, a copy of ${qRevName(q,rev)}. Check it and issue it again.`,'ok');
+  if(CURRENT==='quotereg'){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); }
+}
+/* ===================================================================
+   RAMS  —  release 23.
+   The quote names one of five standard RAMS templates (RAMS-001…005).
+   Converting it adds that RAMS to the job (RAMS tab) with the job sheet
+   filled from the job. Staff complete the rest and issue it; engineers on
+   the job's team read it and sign section 14 in the app (or on site on a
+   supervisor's device, or a signed paper copy is scanned in). Every
+   version downloads as the original Word template, filled in and signed.
+   =================================================================== */
+
+let RAMS_TPL=null, RAMS_HTML={}, JRAMS=null, MYRAMS=null, RAMS_CTX={};
+TITLES.myrams='My RAMS';
+const RAMS_STATUS={draft:['Draft','amber'], issued:['Issued','green'], superseded:['Superseded','grey']};
+
+async function ramsLoadTpl(){
+  if(RAMS_TPL) return RAMS_TPL;
+  try{ const r=await sb.from('rams_templates').select('code,title,summary,fields,sign_table,sign_cols').eq('active',true).order('code'); RAMS_TPL=r.error?[]:(r.data||[]); }
+  catch(e){ RAMS_TPL=[]; }
+  return RAMS_TPL;
+}
+function ramsTpl(code){ return (RAMS_TPL||[]).find(t=>t.code===code)||{code, title:'', fields:[]}; }
+function ramsShort(code){ return String(code||'').replace(/^MAS-HS-/,''); }
+function ramsDocNo(r){ return `${r.template_code} / ${r.job_ref||''}`.trim(); }
+function ramsIssueNo(r){ return `${ramsDocNo(r)} V${r.version}`; }
+function ramsChip(s){ const x=RAMS_STATUS[s]||[s,'grey']; return `<span class="chip ${x[1]}">${x[0]}</span>`; }
+function ramsCan(){ return PROFILE.role==='admin' && jobCan('rams.manage'); }
+
+/* ---------- on the quote ---------- */
+function ramsQuoteField(q, dis){
+  const opts=(RAMS_TPL||[]).map(t=>`<option value="${t.code}" ${q.rams_template===t.code?'selected':''}>${esc(ramsShort(t.code))}</option>`).join('');
+  return `<div class="fld"><label>RAMS template <span class="req">*</span> <span class="muted" style="font-weight:500">(needed to issue)</span></label>
+    <div style="display:flex;gap:6px;align-items:center"><select id="qe_rams" ${dis} style="flex:1"><option value="">— choose —</option>${opts}</select>
+    <button class="btn-ghost" type="button" title="What each RAMS covers" style="padding:6px 12px" onclick="ramsInfo()">ⓘ</button></div>
+    <div class="muted" style="font-size:11.5px;margin-top:3px" id="qe_rams_t">${q.rams_template?esc(ramsTpl(q.rams_template).title):''}</div></div>`;
+}
+function ramsInfo(){
+  const sel=el('qe_rams'), canPick=sel&&!sel.disabled;
+  const box=document.createElement('div'); box.className='modal-bg'; box.id='ramsInfo'; box.style.zIndex=1002;
+  box.innerHTML=`<div class="modal" style="max-width:620px"><div class="modal-h"><h3>RAMS templates</h3><button class="modal-x" onclick="el('ramsInfo').remove()">✕</button></div>
+    <div class="modal-b">${(RAMS_TPL||[]).map(t=>`<div class="litem" style="align-items:flex-start"><div class="bd"><div class="t"><b>${esc(ramsShort(t.code))}</b> · ${esc(t.title)}</div><div class="m" style="white-space:normal">${esc(t.summary)}</div></div>
+      ${canPick?`<button class="btn-ghost" style="padding:4px 10px" onclick="el('qe_rams').value='${t.code}';el('qe_rams_t').textContent='${jss(t.title)}';el('ramsInfo').remove()">Use</button>`:''}</div>`).join('')}</div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="el('ramsInfo').remove()">Close</button></div></div>`;
+  document.body.appendChild(box);
+  if(sel) sel.onchange=()=>{ const t=el('qe_rams_t'); if(t) t.textContent=sel.value?ramsTpl(sel.value).title:''; };
+}
+document.addEventListener('change',e=>{ if(e.target&&e.target.id==='qe_rams'){ const t=el('qe_rams_t'); if(t) t.textContent=e.target.value?ramsTpl(e.target.value).title:''; } });
+
+/* ---------- the job's RAMS tab ---------- */
+async function jobLoadRams(j){
+  const box=el('jobRams'); if(!box) return;
+  await ramsLoadTpl();
+  const r=await sb.from('job_rams').select('*').eq('job_id',j.id).order('template_code').order('version');
+  if(r.error){ box.innerHTML=`<div class="muted">Could not load: ${esc(r.error.message)}</div>`; return; }
+  const list=(r.data||[]).map(x=>({...x, job_ref:j.job_ref}));
+  const ids=list.map(x=>x.id);
+  const [sg, tm]=await Promise.all([
+    ids.length?sb.from('rams_signatures').select('*').in('rams_id',ids).order('signed_at'):Promise.resolve({data:[]}),
+    sb.from('job_team').select('worker_id,role,removed_at').eq('job_id',j.id)]);
+  const team=(tm.data||[]).filter(t=>!t.removed_at);
+  const wids=[...new Set(team.map(t=>t.worker_id))];
+  const wr=wids.length?await sb.from('workers').select('id,full_name,supplier_id').in('id',wids):{data:[]};
+  JRAMS={job:j, list, sigs:sg.data||[], team:team.map(t=>({...t, name:((wr.data||[]).find(w=>w.id===t.worker_id)||{}).full_name||'?'}))};
+  list.forEach(x=>RAMS_CTX[x.id]=x);
+  box.innerHTML=jramsHtml();
+}
+function jramsReload(){ if(JRAMS&&JRAMS.job) jobLoadRams(JRAMS.job); }
+function jramsHtml(){
+  const {job,list}=JRAMS, can=ramsCan();
+  const codes=[...new Set(list.map(x=>x.template_code))];
+  const add=can?(RAMS_TPL||[]).filter(t=>!codes.includes(t.code)):[];
+  const addBox=add.length?`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px"><select id="jr_add" style="width:auto"><option value="">Add a RAMS…</option>${add.map(t=>`<option value="${t.code}">${esc(ramsShort(t.code))} · ${esc(t.title)}</option>`).join('')}</select><button class="btn-ghost" onclick="jramsAdd()">＋ Add</button></div>`:'';
+  if(!list.length) return `<div class="card" style="padding:16px">${emptyState('🦺','No RAMS on this job yet','Choose the RAMS template on the quote before it is converted, or add one here.')}${addBox}</div>`;
+  return codes.map(code=>{
+    const vers=list.filter(x=>x.template_code===code).sort((a,b)=>b.version-a.version), cur=vers[0], t=ramsTpl(code);
+    const issued=vers.find(x=>x.status==='issued');
+    return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap"><div style="flex:1;min-width:240px"><div style="font-weight:800">${esc(ramsShort(code))} · ${esc(t.title)}</div>
+        <div class="muted" style="font-size:12.5px">${esc(ramsIssueNo(cur))} · ${ramsChip(cur.status)}${cur.issued_at?' · issued '+jobDate(String(cur.issued_at).slice(0,10)):''}</div></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn-ghost" onclick="ramsView('${(issued||cur).id}')">👁 View</button><button class="btn-ghost" onclick="ramsWord('${cur.id}')">⬇ Word</button>
+          ${can&&cur.status==='issued'?`<button class="btn-ghost" onclick="jramsNewVersion('${cur.id}')">New version</button>`:''}</div></div>
+      ${cur.status==='draft'?jramsSheetForm(cur, t, can):''}
+      ${issued?jramsSigsHtml(issued, can):''}
+      ${vers.length>1?`<div class="muted" style="font-size:12px;margin-top:8px">All versions: ${vers.map(v=>`<a href="#" onclick="event.preventDefault();ramsView('${v.id}')">V${v.version}</a> ${RAMS_STATUS[v.status][0].toLowerCase()}`).join(' · ')}</div>`:''}
+    </div>`; }).join('')+addBox;
+}
+function jramsSheetForm(r, t, can){
+  const f=r.fields||{}, dis=can?'':'disabled';
+  const rows=(t.fields||[]).map(fd=>{
+    if(fd.key==='issue_no') return `<tr><td class="muted" style="width:38%">${esc(fd.label)}</td><td><b>${esc(ramsIssueNo(r))}</b> <span class="chip grey" style="font-size:10.5px">automatic</span></td></tr>`;
+    const v=f[fd.key]||'', long=/hazard|scope|permits|equipment|areas/i.test(fd.label);
+    return `<tr><td style="width:38%;vertical-align:top;padding-top:10px">${esc(fd.label)} ${fd.auto?'<span class="chip cyan" style="font-size:10.5px">from the job</span>':'<span class="chip amber" style="font-size:10.5px">to complete</span>'}</td>
+      <td>${long?`<textarea class="jr_f" data-k="${fd.key}" rows="2" ${dis} placeholder="${esc(fd.hint||'')}">${esc(v)}</textarea>`:`<input class="jr_f" data-k="${fd.key}" ${dis} value="${esc(v)}" placeholder="${esc(fd.hint||'')}">`}
+      ${fd.key==='ae'&&!v?'<div style="color:var(--amber);font-size:11.5px">Add the nearest A&amp;E to the site record, then Refresh from the job.</div>':''}</td></tr>`; }).join('');
+  return `<div style="margin-top:10px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><b style="flex:1">Job sheet (Part A)</b>${can?`<button class="btn-ghost" style="padding:4px 10px" onclick="jramsRefresh('${r.id}')">↻ Refresh from the job</button>`:''}</div>
+    <div class="fld"><table class="tbl">${rows}</table></div>
+    ${can?`<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap"><button class="btn-ghost" onclick="jramsSave('${r.id}')">Save</button><button class="btn" style="width:auto" onclick="jramsIssue('${r.id}')">Issue V${r.version}</button><span class="savemsg" id="jrMsg"></span></div>`:''}
+    <div class="muted" style="font-size:12px;margin-top:6px">“From the job” rows are filled from the client, site, quote and Team tab and can be edited. Every row must be filled in to issue (write N/A where it doesn’t apply). Issuing locks this version; engineers on the Team tab can then read and sign it.</div></div>`;
+}
+function jramsSigsHtml(r, can){
+  const sigs=JRAMS.sigs.filter(s=>s.rams_id===r.id);
+  const signedW=new Set(sigs.map(s=>s.worker_id).filter(Boolean));
+  const todo=JRAMS.team.filter(t=>!signedW.has(t.worker_id));
+  return `<div style="margin-top:12px"><b>Section 14 — briefing record (V${r.version})</b>
+    <table class="tbl" style="margin-top:6px"><thead><tr><th>Name</th><th>Company</th><th>Card / ID checked</th><th>Signature</th><th>Signed</th></tr></thead><tbody>
+    ${sigs.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.company||'')}</td><td>${esc(s.card_checked||'')}</td><td><img src="${s.signature}" alt="signature" style="height:34px;background:#fff;border-radius:4px"></td><td style="font-size:12px">${new Date(s.signed_at).toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}<div class="muted">${s.method==='app'?'in the app':'on site'}</div></td></tr>`).join('')||'<tr><td colspan="5" class="muted">Nobody has signed yet.</td></tr>'}</tbody></table>
+    ${todo.length?`<div style="font-size:12.5px;margin-top:6px;color:var(--amber)">Not signed yet: ${todo.map(t=>esc(t.name)).join(', ')}</div>`:JRAMS.team.length?'<div style="font-size:12.5px;margin-top:6px;color:var(--green)">✓ Everyone on the team has signed.</div>':''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
+      ${can?`<button class="btn-ghost" onclick="ramsSignOnsite('${r.id}')">✍ Sign on this device</button><label class="btn-ghost" style="cursor:pointer">⤒ Upload signed copy<input type="file" accept="application/pdf,image/*" style="display:none" onchange="jramsUpload('${r.id}',this)"></label>`:''}
+      ${r.signed_copy_path?`<button class="btn-ghost" onclick="jramsScan('${r.id}')">📄 Signed copy (${jobDate(String(r.signed_copy_at||'').slice(0,10))})</button>`:''}</div></div>`;
+}
+function jramsCollect(){ const f={}; document.querySelectorAll('#jobRams .jr_f').forEach(i=>{ f[i.dataset.k]=i.value.trim(); }); return f; }
+async function jramsSave(id, quiet){
+  const r=RAMS_CTX[id]; const fields={...(r.fields||{}), ...jramsCollect()};
+  const u=await sb.from('job_rams').update({fields}).eq('id',id).select();
+  if(u.error||!u.data||!u.data.length){ clSay('jrMsg','Not saved: '+(u.error?u.error.message:'no permission'),'err'); return false; }
+  r.fields=fields; if(!quiet) clSay('jrMsg','✓ Saved.','ok'); return true;
+}
+async function jramsRefresh(id){
+  const r=RAMS_CTX[id]; const p=await sb.rpc('rams_prefill',{p_job:r.job_id}); if(p.error) return clSay('jrMsg','Could not refresh: '+p.error.message,'err');
+  const t=ramsTpl(r.template_code), auto=new Set((t.fields||[]).filter(f=>f.auto).map(f=>f.key));
+  document.querySelectorAll('#jobRams .jr_f').forEach(i=>{ if(auto.has(i.dataset.k) && p.data[i.dataset.k]) i.value=p.data[i.dataset.k]; });
+  clSay('jrMsg','Filled from the job — check and Save.','ok');
+}
+async function jramsIssue(id){
+  if(!await jramsSave(id,true)) return;
+  const r=RAMS_CTX[id];
+  if(!confirm(`Issue ${ramsIssueNo(r)}? It will be locked, and engineers on the Team tab will be asked to read and sign it.`)) return;
+  const x=await sb.rpc('rams_issue',{p_rams:id}); if(x.error) return clSay('jrMsg',x.error.message,'err');
+  jramsReload();
+}
+async function jramsNewVersion(id){
+  const r=RAMS_CTX[id];
+  if(!confirm(`Start V${r.version+1} of ${ramsDocNo(r)}? V${r.version} stays in force until V${r.version+1} is issued; then everyone signs again.`)) return;
+  const x=await sb.rpc('rams_new_version',{p_rams:id}); if(x.error) return alert('Not started: '+x.error.message);
+  jramsReload();
+}
+async function jramsAdd(){
+  const code=val('jr_add'); if(!code) return;
+  const j=JRAMS.job; const p=await sb.rpc('rams_prefill',{p_job:j.id});
+  const x=await sb.from('job_rams').insert({job_id:j.id, template_code:code, fields:p.data||{}});
+  if(x.error) return alert('Not added: '+x.error.message);
+  jramsReload();
+}
+async function jramsUpload(id, inp){
+  const f=inp.files[0]; if(!f) return;
+  const path=`rams/${id}/${Date.now()}_${f.name.replace(/[^A-Za-z0-9._-]/g,'_')}`;
+  const u=await sb.storage.from('commercial').upload(path,f,{contentType:f.type||'application/octet-stream',upsert:false});
+  if(u.error) return alert('Upload failed: '+u.error.message);
+  const x=await sb.from('job_rams').update({signed_copy_path:path}).eq('id',id).select();
+  if(x.error) return alert('Not saved: '+x.error.message);
+  jramsReload();
+}
+async function jramsScan(id){
+  const r=RAMS_CTX[id]; const w=window.open('about:blank','_blank');
+  const s=await sb.storage.from('commercial').createSignedUrl(r.signed_copy_path,120);
+  if(s.error){ if(w) w.close(); return alert('Could not open: '+s.error.message); }
+  if(w) w.location.href=s.data.signedUrl; else window.open(s.data.signedUrl,'_blank');
+}
+
+/* ---------- signature pad ---------- */
+function ramsPad(title, extra, onSave){
+  const box=document.createElement('div'); box.className='modal-bg'; box.id='ramsPad'; box.style.zIndex=1003;
+  box.innerHTML=`<div class="modal" style="max-width:560px"><div class="modal-h"><h3>${title}</h3><button class="modal-x" onclick="el('ramsPad').remove()">✕</button></div>
+    <div class="modal-b">${extra||''}<div class="muted" style="font-size:12.5px;margin:6px 0">Sign in the box with your finger or mouse.</div>
+      <canvas id="padCv" width="500" height="170" style="width:100%;max-width:500px;height:170px;background:#fff;border-radius:8px;touch-action:none;border:1px solid var(--line2)"></canvas>
+      <div><button class="btn-ghost" style="padding:4px 10px;margin-top:6px" onclick="ramsPadClear()">Clear</button></div></div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="el('ramsPad').remove()">Cancel</button><button class="btn" id="padSave">Sign</button></div><div class="savemsg" id="padMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(box);
+  const cv=el('padCv'), cx=cv.getContext('2d'); cx.lineWidth=2.4; cx.lineCap='round'; cx.strokeStyle='#0B1F3A'; cv._ink=0;
+  let down=false, last=null;
+  const pos=e=>{ const b=cv.getBoundingClientRect(); return [(e.clientX-b.left)*cv.width/b.width,(e.clientY-b.top)*cv.height/b.height]; };
+  cv.addEventListener('pointerdown',e=>{ down=true; last=pos(e); cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener('pointermove',e=>{ if(!down) return; const p=pos(e); cx.beginPath(); cx.moveTo(last[0],last[1]); cx.lineTo(p[0],p[1]); cx.stroke(); cv._ink+=Math.hypot(p[0]-last[0],p[1]-last[1]); last=p; });
+  ['pointerup','pointerleave','pointercancel'].forEach(t=>cv.addEventListener(t,()=>{ down=false; }));
+  el('padSave').onclick=async()=>{ if(cv._ink<30){ el('padMsg').textContent='Please sign in the box.'; el('padMsg').className='savemsg err'; return; }
+    el('padSave').disabled=true; const ok=await onSave(cv.toDataURL('image/png')); if(ok===false) el('padSave').disabled=false; else el('ramsPad').remove(); };
+}
+function ramsPadClear(){ const cv=el('padCv'); cv.getContext('2d').clearRect(0,0,cv.width,cv.height); cv._ink=0; }
+function ramsPadErr(t){ const m=el('padMsg'); if(m){ m.textContent=t; m.className='savemsg err'; } return false; }
+function ramsSignOnsite(id){
+  const r=RAMS_CTX[id], signed=new Set(JRAMS.sigs.filter(s=>s.rams_id===id).map(s=>s.worker_id));
+  const opts=JRAMS.team.filter(t=>!signed.has(t.worker_id)).map(t=>`<option value="${t.worker_id}" data-n="${esc(t.name)}">${esc(t.name)}</option>`).join('');
+  ramsPad(`Sign ${esc(ramsIssueNo(r))}`, `<div class="fld"><label>Who is signing</label><select id="pad_who" onchange="const o=this.selectedOptions[0];el('pad_name').value=this.value?o.dataset.n:''">${opts}<option value="">Someone else (type their name)</option></select></div>
+      <div class="frow"><div class="fld"><label>Name <span class="req">*</span></label><input id="pad_name" value="${esc((JRAMS.team.find(t=>!signed.has(t.worker_id))||{}).name||'')}"></div><div class="fld"><label>Company</label><input id="pad_co" placeholder="e.g. Mercury, FlexTech"></div></div>
+      <div class="fld"><label>Card / ID checked</label><input id="pad_card" placeholder="e.g. CSCS 123456"></div>
+      <div class="muted" style="font-size:12px">By signing they confirm they have been briefed on this RAMS and the job sheet.</div>`,
+    async sig=>{ const x=await sb.rpc('rams_sign_onsite',{p_rams:id,p_name:val('pad_name'),p_company:val('pad_co')||null,p_card:val('pad_card')||null,p_signature:sig,p_worker:val('pad_who')||null});
+      if(x.error) return ramsPadErr(x.error.message); jramsReload(); return true; });
+}
+
+/* ---------- reading a RAMS (staff and engineers) ---------- */
+async function ramsHtmlFor(code){
+  if(RAMS_HTML[code]) return RAMS_HTML[code];
+  const r=await sb.from('rams_templates').select('body_html,brief_html,tail_html').eq('code',code).single();
+  if(r.error) throw r.error; RAMS_HTML[code]=r.data; return r.data;
+}
+async function ramsView(id){
+  await ramsLoadTpl();
+  const r=RAMS_CTX[id]; if(!r) return;
+  let h; try{ h=await ramsHtmlFor(r.template_code); }catch(e){ return alert('Could not load the RAMS: '+(e.message||e)); }
+  const sg=await sb.from('rams_signatures').select('*').eq('rams_id',id).order('signed_at'); const sigs=sg.data||[];
+  const t=ramsTpl(r.template_code), f=r.fields||{};
+  const row=(l,v)=>`<tr><td style="width:36%;background:var(--panel2)"><b>${esc(l)}</b></td><td style="white-space:pre-line">${esc(v||'')}</td></tr>`;
+  const mine=PROFILE.role==='engineer' && r.status==='issued' && r._canSign;
+  const w=document.createElement('div'); w.className='modal-bg'; w.id='ramsDoc'; w.style.zIndex=1001;
+  w.innerHTML=`<div class="modal" style="max-width:900px;width:96vw"><div class="modal-h"><h3>${esc(ramsIssueNo(r))} ${ramsChip(r.status)}</h3><button class="modal-x" onclick="el('ramsDoc').remove()">✕</button></div>
+    <div class="modal-b rams-doc" style="font-size:13.5px;line-height:1.5">
+      <div style="font-weight:800;font-size:16px">${esc(r.template_code)}</div><div style="margin-bottom:8px">Standard RAMS - ${esc(t.title)}</div>
+      <table class="tbl" style="margin-bottom:14px">${row('Document reference',r.template_code)}${row('Version','V'+r.version)}${row('Status',RAMS_STATUS[r.status][0])}${row('Issue date',r.issued_at?jobDate(String(r.issued_at).slice(0,10)):'Not issued yet')}</table>
+      <h3>Part A. Job sheet</h3><table class="tbl" style="margin-bottom:14px">${(t.fields||[]).map(fd=>row(fd.label, fd.key==='issue_no'?ramsIssueNo(r):f[fd.key])).join('')}</table>
+      ${h.body_html}${h.brief_html}
+      <table class="tbl"><thead><tr><th>Name</th><th>Company</th><th>Card / ID checked</th><th>Signature</th><th>Date</th></tr></thead><tbody>
+        ${sigs.map(s=>`<tr><td>${esc(s.name)}</td><td>${esc(s.company||'')}</td><td>${esc(s.card_checked||'')}</td><td><img src="${s.signature}" style="height:34px;background:#fff;border-radius:4px"></td><td>${jobDate(String(s.signed_at).slice(0,10))}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">No signatures yet.</td></tr>'}</tbody></table>
+      ${mine?(r._signed?'<div style="margin:10px 0;color:var(--green);font-weight:700">✓ You have signed this version.</div>':`<div style="margin:12px 0"><button class="btn" style="width:auto" onclick="ramsSignMine('${r.id}')">✍ I have been briefed — sign section 14</button></div>`):''}
+      ${h.tail_html}</div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="ramsWord('${r.id}')">⬇ Download Word</button><button class="btn-ghost" onclick="el('ramsDoc').remove()">Close</button></div></div>`;
+  document.body.appendChild(w);
+  w.querySelectorAll('.rams-doc table').forEach(tb=>{ tb.classList.add('tbl'); tb.style.marginBottom='12px'; });
+}
+function ramsSignMine(id){
+  const r=RAMS_CTX[id];
+  ramsPad(`Sign ${esc(ramsIssueNo(r))}`, `<div style="font-size:13px">By signing you confirm you have been briefed on this RAMS and the job sheet, you understand the method, the hazards and the controls, and that you will stop and ask if anything changes.</div>`,
+    async sig=>{ const x=await sb.rpc('rams_sign',{p_rams:id,p_signature:sig}); if(x.error) return ramsPadErr(x.error.message);
+      const d=el('ramsDoc'); if(d) d.remove(); MYRAMS=null; go('myrams'); return true; });
+}
+
+/* ---------- engineers: My RAMS ---------- */
+async function myRamsLoad(){
+  try{ await ramsLoadTpl(); const r=await sb.rpc('my_rams'); if(r.error) throw r.error; MYRAMS=r.data||[]; }catch(e){ MYRAMS=[]; MYRAMS.err=e.message||String(e); }
+  if(CURRENT==='myrams') go('myrams');
+}
+function pageMyRams(){
+  if(MYRAMS===null){ myRamsLoad(); return emptyState('⏳','Loading…',''); }
+  if(MYRAMS.err) return emptyState('⚠','Could not load',esc(MYRAMS.err));
+  if(!MYRAMS.length) return emptyState('🦺','No RAMS to read','When you are on a job’s team and its RAMS is issued, it appears here for you to read and sign.');
+  const todo=MYRAMS.filter(x=>!x.signed);
+  return `<div class="sechead"><h3>🦺 My RAMS</h3><span class="sub">${todo.length?`${todo.length} to read and sign`:'All signed'}</span><span class="line"></span></div>
+    ${MYRAMS.map(x=>`<div class="card" style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:220px"><div style="font-weight:800">${esc(x.job_ref)} · ${esc(x.job_title||'')}</div>
+        <div class="muted" style="font-size:12.5px">${esc(ramsShort(x.template_code))} · ${esc(ramsTpl(x.template_code).title)} · V${x.version}${x.site?' · '+esc(x.site):''}</div></div>
+      ${x.signed?'<span class="chip green">✓ Signed</span>':'<span class="chip amber">To sign</span>'}<button class="btn${x.signed?'-ghost':''}" style="width:auto" onclick="myRamsOpen('${x.id}')">${x.signed?'Read':'Read and sign'}</button></div>`).join('')}`;
+}
+async function myRamsOpen(id){
+  const x=MYRAMS.find(m=>m.id===id); const r=await sb.from('job_rams').select('*').eq('id',id).single();
+  if(r.error) return alert('Could not open: '+r.error.message);
+  RAMS_CTX[id]={...r.data, job_ref:x.job_ref, _canSign:true, _signed:x.signed};
+  ramsView(id);
+}
+
+/* ---------- Word: the original template, filled in and signed ---------- */
+async function ramsUnzip(buf){
+  const u8=new Uint8Array(buf), dv=new DataView(buf), files={};
+  let e=u8.length-22; while(e>=0 && dv.getUint32(e,true)!==0x06054b50) e--;
+  const n=dv.getUint16(e+10,true); let p=dv.getUint32(e+16,true);
+  const dec=new TextDecoder();
+  for(let i=0;i<n;i++){
+    const method=dv.getUint16(p+10,true), csz=dv.getUint32(p+20,true), nl=dv.getUint16(p+28,true), xl=dv.getUint16(p+30,true), cl=dv.getUint16(p+32,true), off=dv.getUint32(p+42,true);
+    const name=dec.decode(u8.subarray(p+46,p+46+nl));
+    const lnl=dv.getUint16(off+26,true), lxl=dv.getUint16(off+28,true), start=off+30+lnl+lxl, data=u8.subarray(start,start+csz);
+    if(method===0) files[name]=data.slice();
+    else { const ds=new DecompressionStream('deflate-raw'); const out=await new Response(new Blob([data]).stream().pipeThrough(ds)).arrayBuffer(); files[name]=new Uint8Array(out); }
+    p+=46+nl+xl+cl;
+  }
+  return files;
+}
+function xmlEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function xmlText(x){ return (x.match(/<w:t[^>]*>[^<]*<\/w:t>/g)||[]).map(t=>t.replace(/<[^>]+>/g,'')).join('').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'"); }
+function xmlBlocks(x, open, close){   // top-level blocks of one tag, as [start, end]
+  const out=[]; let i=0, depth=0, start=-1;
+  while(true){
+    const a=x.indexOf(open,i), b=x.indexOf(close,i); if(b<0) break;
+    if(a>=0 && a<b){ const ch=x.charAt(a+open.length); if(ch==='>'||ch===' '){ if(depth===0) start=a; depth++; } i=a+open.length; }
+    else { depth--; i=b+close.length; if(depth===0 && start>=0){ out.push([start,i]); start=-1; } }
+  }
+  return out;
+}
+function xmlRun(text){ return String(text).split('\n').map((l,i)=>`${i?'<w:r><w:br/></w:r>':''}<w:r><w:rPr><w:sz w:val="19"/><w:szCs w:val="19"/></w:rPr><w:t xml:space="preserve">${xmlEsc(l)}</w:t></w:r>`).join(''); }
+function xmlSetCell(tc, inner){ const k=tc.indexOf('</w:tcPr>'); const head=k>=0?tc.slice(0,k+9):tc.slice(0,tc.indexOf('>')+1); return `${head}<w:p><w:pPr><w:spacing w:after="40"/></w:pPr>${inner}</w:p></w:tc>`; }
+function xmlSigImg(rid, n){ const cx=1188720, cy=411480;
+  return `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${9000+n}" name="Signature ${n}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${9000+n}" name="sig${n}.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rid}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`; }
+function b64ToU8(b){ const s=atob(b); const u=new Uint8Array(s.length); for(let i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u; }
+async function ramsWord(id){
+  try{
+    await ramsLoadTpl();
+    const r=RAMS_CTX[id]; const t=ramsTpl(r.template_code);
+    const [d, sg]=await Promise.all([sb.from('rams_templates').select('docx_b64').eq('code',r.template_code).single(), sb.from('rams_signatures').select('*').eq('rams_id',id).order('signed_at')]);
+    if(d.error) throw d.error;
+    const files=await ramsUnzip(b64ToU8(d.data.docx_b64).buffer);
+    const dec=new TextDecoder(), enc=new TextEncoder();
+    let x=dec.decode(files['word/document.xml']);
+    const tbl=xmlBlocks(x,'<w:tbl','</w:tbl>');
+    const f=r.fields||{}, sigs=sg.data||[], rels=[], media={};
+    const fillTable=(ti, fn)=>{ const [a,b]=tbl[ti]; let tx=x.slice(a,b);
+      const rows=xmlBlocks(tx,'<w:tr','</w:tr>');
+      const newRows=fn(rows.map(([s,e])=>tx.slice(s,e)));
+      const out=tx.slice(0,rows[0][0])+newRows.join('')+tx.slice(rows[rows.length-1][1]);
+      return [a,b,out]; };
+    const edits=[];
+    // header table: version, status, issue date
+    edits.push(fillTable(0, rows=>rows.map(rw=>{ const cells=xmlBlocks(rw,'<w:tc','</w:tc>'); if(cells.length<2) return rw;
+      const lab=xmlText(rw.slice(cells[0][0],cells[0][1])).trim();
+      const val={'Document reference':r.template_code,'Version':'V'+r.version,'Status':RAMS_STATUS[r.status][0],'Issue date':r.issued_at?new Date(r.issued_at).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'}):'Not issued'}[lab];
+      if(val===undefined) return rw;
+      return rw.slice(0,cells[1][0])+xmlSetCell(rw.slice(cells[1][0],cells[1][1]),xmlRun(val))+rw.slice(cells[1][1]); })));
+    // job sheet
+    edits.push(fillTable(1, rows=>rows.map(rw=>{ const cells=xmlBlocks(rw,'<w:tc','</w:tc>'); if(cells.length<2) return rw;
+      const lab=xmlText(rw.slice(cells[0][0],cells[0][1])).trim(); const fd=(t.fields||[]).find(z=>z.label===lab); if(!fd) return rw;
+      const v=fd.key==='issue_no'?ramsIssueNo(r):(f[fd.key]||'');
+      return rw.slice(0,cells[1][0])+xmlSetCell(rw.slice(cells[1][0],cells[1][1]),xmlRun(v))+rw.slice(cells[1][1]); })));
+    // section 14 signatures
+    if(t.sign_table!=null && tbl[t.sign_table]) edits.push(fillTable(t.sign_table, rows=>{
+      const head=rows[0], blank=rows[rows.length-1], body=rows.slice(1);
+      while(body.length<sigs.length) body.push(blank);
+      return [head, ...body.map((rw,i)=>{ const s=sigs[i]; if(!s) return rw;
+        const rid='rIdSig'+(i+1); rels.push(`<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/sig${i+1}.png"/>`);
+        media[`word/media/sig${i+1}.png`]=b64ToU8(s.signature.split(',')[1]);
+        const when=new Date(s.signed_at).toLocaleDateString('en-GB');
+        const vals=t.sign_cols>=5?[xmlRun(s.name),xmlRun(s.company||''),xmlRun(s.card_checked||''),xmlSigImg(rid,i+1),xmlRun(when)]:[xmlRun(s.name),xmlSigImg(rid,i+1),xmlRun(when)];
+        const cells=xmlBlocks(rw,'<w:tc','</w:tc>'); let o=rw.slice(0,cells[0][0]);
+        cells.forEach(([a,b],k)=>{ o+=xmlSetCell(rw.slice(a,b), vals[k]!==undefined?vals[k]:''); if(k<cells.length-1) o+=rw.slice(b,cells[k+1][0]); });
+        return o+rw.slice(cells[cells.length-1][1]); })]; }));
+    edits.sort((p,q)=>q[0]-p[0]).forEach(([a,b,out])=>{ x=x.slice(0,a)+out+x.slice(b); });
+    files['word/document.xml']=enc.encode(x);
+    if(rels.length){ let rx=dec.decode(files['word/_rels/document.xml.rels']); rx=rx.replace('</Relationships>',rels.join('')+'</Relationships>'); files['word/_rels/document.xml.rels']=enc.encode(rx); Object.assign(files,media); }
+    const blob=zipBuild(Object.keys(files).map(name=>({name, data:files[name]})));
+    const out=new Blob([blob],{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(out); a.download=`${r.template_code} ${r.job_ref||''} V${r.version}.docx`.replace(/\s+/g,' ');
+    document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },2000);
+  }catch(e){ alert('Could not build the Word file: '+(e.message||e)); }
+}
 </script>
 </body>
 </html>
