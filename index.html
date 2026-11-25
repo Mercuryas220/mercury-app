@@ -7540,16 +7540,49 @@ async function xoSendNow(){
 /* ---------- Queue and history ---------- */
 function xoQueueHtml(history){
   const rows=XO.items.filter(i=>history?['sent','withdrawn','in_xero'].includes(i.status):['queued','sending','failed'].includes(i.status));
-  if(!rows.length) return `<div class="card" style="padding:18px">${emptyState(history?'🗂':'📭',history?'Nothing yet':'Queue is empty',history?'Items sent to Xero, taken back or marked as already in Xero appear here.':'Ticked items wait here until they are sent.')}</div>`;
+  const top=history?'':xoSendNowHtml();
+  if(!rows.length) return top+`<div class="card" style="padding:18px">${emptyState(history?'🗂':'📭',history?'Nothing yet':'Queue is empty',history?'Items sent to Xero, taken back or marked as already in Xero appear here.':'Ticked items wait here until they are sent.')}</div>`;
   const type=t=>(XO_TYPES.find(x=>x[0]===t)||[t,t])[1];
   const can=jobCan('xero.send');
-  return `<div class="card" style="padding:8px 10px;overflow-x:auto"><table class="tbl"><thead><tr><th>Reference</th><th>Type</th><th>Contact</th><th style="text-align:right">Net</th><th>Status</th><th>Who / when</th><th></th></tr></thead><tbody>${rows.map(i=>{
+  return top+`<div class="card" style="padding:8px 10px;overflow-x:auto"><table class="tbl"><thead><tr><th>Reference</th><th>Type</th><th>Contact</th><th style="text-align:right">Net</th><th>Status</th><th>Who / when</th><th></th></tr></thead><tbody>${rows.map(i=>{
       const s=XO_STATUS[i.status]||[i.status,'grey'];
       const wait=i.status==='queued'&&!xoConnected(i.entity_code)?'<div class="muted" style="font-size:11.5px">Waiting for the Xero connection</div>':'';
       return `<tr><td><b>${esc(i.ref)}</b><div class="muted" style="font-size:11.5px">${esc(i.entity_code)}</div></td><td style="font-size:12.5px">${esc(type(i.item_type))}</td><td>${esc(i.party_name||'')}</td>
         <td style="text-align:right">${i.item_type==='po_billed'?'':jobMoney(i.amount,i.currency)}</td><td><span class="chip ${s[1]}">${s[0]}</span>${wait}${i.xero_number?`<div style="font-size:12px">Xero ${esc(i.xero_number)}</div>`:''}${i.error?`<div style="color:var(--red);font-size:12px">${esc(i.error)}</div>`:''}${i.reason?`<div class="muted" style="font-size:12px">${esc(i.reason)}</div>`:''}</td>
         <td style="font-size:12px">${esc(xoUser(i.queued_by))}<div class="muted">${jobDate(i.queued_at)}${i.closed_at?' → '+jobDate(i.closed_at)+' '+esc(xoUser(i.closed_by)):''}</div></td>
         <td>${can&&['queued','failed','in_xero'].includes(i.status)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoWithdraw('${i.id}','${i.status}')">${i.status==='in_xero'?'Undo':'Take back'}</button>`:''}</td></tr>`; }).join('')}</tbody></table></div>`;
+}
+/* ---------- Send now (Phase 5b) ----------
+   Runs the "xero-sender" back-room function, which delivers every queued
+   item to Xero and marks it In Xero or Failed. Accounts only. */
+let XO_RUN=null, XO_RUNNING=false;
+function xoSendNowHtml(){
+  if(!jobCan('xero.send')) return '';
+  const waiting=XO.items.filter(i=>i.status==='queued').length;
+  const res=XO_RUN?`<div style="margin-top:10px;font-size:13px">
+      <div style="font-weight:700;color:${XO_RUN.ok?'var(--green)':'var(--amber)'}">${XO_RUN.ok?'✓':'!'} ${esc(XO_RUN.message||'')}</div>
+      ${(XO_RUN.results||[]).map(r=>`<div style="font-size:12.5px;margin-top:3px">${r.result==='In Xero'?'<span style="color:var(--green)">✓</span>':'<span style="color:var(--red)">✕</span>'} <b>${esc(r.ref||'')}</b> — ${esc(r.result||'')}${r.xeroNumber?' · Xero '+esc(r.xeroNumber):''}${r.reason?'<div class="muted" style="margin-left:16px">'+esc(r.reason)+'</div>':''}${(r.notes||[]).map(n=>'<div class="muted" style="margin-left:16px">'+esc(n)+'</div>').join('')}</div>`).join('')}
+    </div>`:'';
+  return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <div style="flex:1;font-size:13px">${waiting?`<b>${waiting}</b> item${waiting===1?'':'s'} waiting to go to Xero.`:'Nothing waiting to go to Xero.'}</div>
+        <button class="btn" id="xoRunBtn" style="width:auto;padding:9px 22px" ${waiting&&!XO_RUNNING?'':'disabled'} onclick="xoRunCourier()">${XO_RUNNING?'Sending…':'Send now'}</button>
+      </div>${res}</div>`;
+}
+async function xoRunCourier(){
+  if(XO_RUNNING) return;
+  const waiting=XO.items.filter(i=>i.status==='queued').length;
+  if(!confirm(`Send ${waiting} queued item${waiting===1?'':'s'} to Xero now?`)) return;
+  XO_RUNNING=true; XO_RUN=null; const b=el('xoRunBtn'); if(b){ b.disabled=true; b.textContent='Sending…'; }
+  let out;
+  try{
+    const r=await sb.functions.invoke('xero-sender',{body:{}});
+    if(r.error){
+      let detail=null; try{ detail=await r.error.context.json(); }catch(e){}
+      out=detail&&detail.message?{ok:false,message:detail.message+(detail.xeroSaid?' — '+detail.xeroSaid:''),results:detail.results||[]}:{ok:false,message:'Could not run the send: '+(r.error.message||String(r.error))};
+    } else out=r.data||{ok:false,message:'No reply from the send.'};
+  }catch(e){ out={ok:false,message:'Could not run the send: '+(e.message||String(e))}; }
+  XO_RUNNING=false; XO_RUN=out; XO=null; go('xero');
 }
 async function xoWithdraw(id,st){
   const reason=prompt(st==='in_xero'?'Put this item back on the check list?\n\nReason:':'Take this item back? It returns to the check list.\n\nReason:'); if(reason===null) return;
