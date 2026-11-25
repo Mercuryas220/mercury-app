@@ -5495,9 +5495,11 @@ function quoteSetFilter(k,v){ QUOTE_F[k]=v; const t=el('quoteTable'); if(t){ t.i
 function quoteTableHtml(){
   const rows=quoteFiltered();
   if(!rows.length) return `<div class="empty" style="padding:26px"><div class="big">📝</div><b>No quotes match</b><div style="margin-top:6px;font-size:13px">${(QUOTES||[]).length?'Try a different filter.':(jobCan('quotes.create')?'Tap “＋ New quote” to create the first one.':'No quotes yet.')}</div></div>`;
-  const conv=jobCan('jobs.convert');
-  return `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Ref</th><th>Quote</th><th>Client</th><th>Project Owner / Manager</th><th>Status</th><th>Created</th><th>Valid until / follow-up</th><th style="text-align:right">Value</th><th></th></tr></thead><tbody>${
-    rows.map(x=>`<tr${x.archived_at?' style="opacity:.6"':''}>
+  const conv=jobCan('jobs.convert'), bulk=jobCan('quotes.create');
+  QSEL=new Set([...QSEL].filter(id=>rows.some(x=>x.id===id&&qBulkOk(x))));
+  const elig=rows.filter(qBulkOk), allOn=elig.length&&elig.every(x=>QSEL.has(x.id));
+  return `${bulk?qBulkBar():''}<div style="overflow-x:auto"><table class="tbl"><thead><tr>${bulk?`<th style="width:28px">${elig.length?`<input type="checkbox" style="width:auto" title="Select all shown" ${allOn?'checked':''} onchange="qBulkAll(this.checked)">`:''}</th>`:''}<th>Ref</th><th>Quote</th><th>Client</th><th>Project Owner / Manager</th><th>Status</th><th>Created</th><th>Valid until / follow-up</th><th style="text-align:right">Value</th><th></th></tr></thead><tbody>${
+    rows.map(x=>`<tr${x.archived_at?' style="opacity:.6"':''}>${bulk?`<td>${qBulkOk(x)?`<input type="checkbox" class="qsel" style="width:auto" ${QSEL.has(x.id)?'checked':''} onchange="qBulkTick('${x.id}',this.checked)">`:''}</td>`:''}
       <td style="white-space:nowrap"><b>${qRef(x)}</b>${x.quote_ref&&x.lead_ref?`<div class="muted" style="font-size:11px">from ${esc(x.lead_ref)}</div>`:''}<div class="muted" style="font-size:11px">${esc(x.entity_code)}</div></td>
       <td>${esc(x.title)}${x.client_po_ref?`<div class="muted" style="font-size:11.5px">PO ${esc(x.client_po_ref)}</div>`:''}</td>
       <td>${esc(jobClientName(x.client_id))}${x.site_id?`<div class="muted" style="font-size:11.5px">${esc(jobSiteName(x.site_id))}</div>`:''}</td>
@@ -6062,6 +6064,61 @@ async function qHistory(){
     <div class="modal-foot"><button class="btn-ghost" onclick="closeForm();openQuote('${q.id}')">Back to quote</button></div></div>`;
   document.body.appendChild(wrap);
 }
+
+/* ---------- several quotes at once: mark as lost / archive ---------- */
+let QSEL=new Set();
+function qBulkLostOk(x){ return !x.job_id && !x.archived_at && ['lead','issued','expired'].includes(x.status); }
+function qBulkArchOk(x){ return !x.job_id && !x.archived_at && x.status!=='accepted'; }
+function qBulkOk(x){ return qBulkLostOk(x)||qBulkArchOk(x); }
+function qBulkSel(){ return (QUOTES||[]).filter(x=>QSEL.has(x.id)); }
+function qBulkBar(){
+  const sel=qBulkSel(); if(!sel.length) return '';
+  const nl=sel.filter(qBulkLostOk).length, na=sel.filter(qBulkArchOk).length;
+  return `<div class="card" id="qBulkBar" style="padding:10px 14px;margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-left:3px solid var(--cyan)">
+    <div style="flex:1"><b>${sel.length}</b> selected</div>
+    <button class="btn-ghost" style="color:var(--red)" ${nl?'':'disabled'} onclick="qBulkLostForm()">Mark as lost${nl<sel.length?` (${nl})`:''}</button>
+    <button class="btn-ghost" ${na?'':'disabled'} onclick="qBulkArchive()">Archive${na<sel.length?` (${na})`:''}</button>
+    <button class="btn-ghost" onclick="QSEL.clear();qBulkRedraw()">Clear</button></div>`;
+}
+function qBulkRedraw(){ const t=el('quoteTable'); if(t) t.innerHTML=quoteTableHtml(); else go('quotereg'); }
+function qBulkTick(id,on){ on?QSEL.add(id):QSEL.delete(id); qBulkRedraw(); }
+function qBulkAll(on){ quoteFiltered().filter(qBulkOk).forEach(x=>on?QSEL.add(x.id):QSEL.delete(x.id)); qBulkRedraw(); }
+function qBulkLostForm(){
+  const sel=qBulkSel().filter(qBulkLostOk), skip=qBulkSel().length-sel.length;
+  const wrap=document.createElement('div'); wrap.className='modal-bg'; wrap.id='modalBg';
+  wrap.innerHTML=`<div class="modal" style="max-width:540px"><div class="modal-h"><h3>Mark ${sel.length} quote${sel.length===1?'':'s'} as lost</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
+    <div class="modal-b">
+      <div style="font-size:12.5px;margin-bottom:10px">${sel.map(x=>`<span class="chip grey" style="margin:2px">${esc(x.quote_ref||x.lead_ref)}</span>`).join('')}${skip?`<div class="muted" style="margin-top:6px">${skip} other selected quote${skip===1?' is':'s are'} being prepared and can’t be marked as lost; ${skip===1?'it':'they'} will be left as ${skip===1?'it is':'they are'}.</div>`:''}</div>
+      <div class="fld"><label>Why were they lost? <span class="req">*</span></label><select id="qbl_reason"><option value="">— choose —</option>${LOST_REASONS.map(r=>`<option value="${r[0]}">${esc(r[1])}</option>`).join('')}</select></div>
+      <div class="fld"><label>Note <span class="muted" style="font-weight:500">(needed for “Other”)</span></label><textarea id="qbl_note" rows="2"></textarea></div>
+      <div class="muted" style="font-size:12px">The same reason is recorded on each quote. Lost quotes stay on record and can be revised later.</div></div>
+    <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="qblGo" style="background:var(--red)" onclick="qBulkLostSave()">Mark ${sel.length} as lost</button></div>
+    <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
+  document.body.appendChild(wrap);
+}
+async function qBulkRun(list, patch, done){
+  let ok=0; const bad=[];
+  for(const x of list){
+    const r=await sb.from('quotes').update(typeof patch==='function'?patch(x):patch).eq('id',x.id).select();
+    if(r.error||!r.data||!r.data.length) bad.push(`${x.quote_ref||x.lead_ref}: ${r.error?r.error.message:'no permission'}`); else { qStore(r.data[0]); QSEL.delete(x.id); ok++; }
+  }
+  QSEL.clear(); closeForm(); qBulkRedraw();
+  setTimeout(()=>{ const t=el('quoteTable'); if(t) t.insertAdjacentHTML('beforebegin',`<div class="box" id="qBulkDone" style="background:${bad.length?'var(--amber-soft)':'var(--green-soft)'};border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px">✓ ${ok} ${done}.${bad.length?`<div style="margin-top:4px">Not changed: ${bad.map(esc).join('; ')}</div>`:''}</div>`); },50);
+}
+async function qBulkLostSave(){
+  const reason=el('qbl_reason').value, note=el('qbl_note').value.trim();
+  if(!reason) return msg('Choose why they were lost.','err');
+  if(reason==='other' && !note) return msg('Add a note saying why.','err');
+  el('qblGo').disabled=true; msg('Saving…');
+  await qBulkRun(qBulkSel().filter(qBulkLostOk), {status:'rejected', lost_reason:reason, rejected_reason:note||null}, 'marked as lost');
+}
+async function qBulkArchive(){
+  const list=qBulkSel().filter(qBulkArchOk);
+  const reason=prompt(`Archive ${list.length} quote${list.length===1?'':'s'} (${list.map(x=>x.quote_ref||x.lead_ref).join(', ')})? They leave the normal lists but are never deleted.\n\nReason:`);
+  if(reason===null) return; if(!reason.trim()) return alert('A reason is needed to archive.');
+  await qBulkRun(list, {archived_at:new Date().toISOString(), archive_reason:reason.trim()}, 'archived');
+}
+
 /* ===================================================================
    PURCHASING  —  Phase 3a. Purchase orders against jobs, supplier
    invoices entered against POs, other job costs (company card,
