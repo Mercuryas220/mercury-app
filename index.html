@@ -6305,7 +6305,7 @@ function renderPOModal(){
   const lines=PEDIT.lines.map((l,i)=>poLineRow(l,i,ed,cur)).join('')||`<tr><td colspan="7" class="muted" style="padding:14px">No lines yet${ed?' — add the first one below.':'.'}</td></tr>`;
   const inv=(PEDIT.invoices||[]).map(x=>{ const ls=(PEDIT.invLines||[]).filter(l=>l.invoice_id===x.id).map(l=>{ const pl=PEDIT.lines.find(y=>y.id===l.po_line_id); return `${esc(pl?pl.description:l.cost_code)} ${jobMoney(l.amount,cur)}`; }).join('<br>');
     const pdf=(PEDIT.atts||[]).find(a=>a.supplier_invoice_id===x.id && !a.archived_at);
-    return `<tr${x.status==='void'?' style="opacity:.55;text-decoration:line-through"':''}><td>${esc(x.invoice_no)}</td><td>${jobDate(x.invoice_date)}</td><td style="font-size:12.5px">${ls}</td><td style="text-align:right">${jobMoney(x.net_amount,cur)}${x.vat_amount!=null?`<div class="muted" style="font-size:11px">VAT ${jobMoney(x.vat_amount,cur)}</div>`:''}</td><td style="white-space:nowrap">${pdf?`<button class="btn-ghost" style="padding:3px 8px" onclick="poOpenAttachment('${pdf.id}')">PDF</button> `:''}${x.status==='void'?'Void: '+esc(x.void_reason||''):(jobCan('costs.enter')?`<button class="btn-ghost" style="padding:3px 8px" onclick="poVoidInvoice('${x.id}')">Void</button>`:'')}</td></tr>`; }).join('');
+    return `<tr${x.status==='void'?' style="opacity:.55;text-decoration:line-through"':''}><td>${esc(x.invoice_no)}</td><td>${jobDate(x.invoice_date)}</td><td style="font-size:12.5px">${ls}</td><td style="text-align:right">${jobMoney(x.net_amount,cur)}${x.vat_amount!=null?`<div class="muted" style="font-size:11px">VAT ${jobMoney(x.vat_amount,cur)}</div>`:''}</td><td style="white-space:nowrap">${x.status!=='void'?siPayChip(x)+' ':''}${pdf?`<button class="btn-ghost" style="padding:3px 8px" onclick="poOpenAttachment('${pdf.id}')">PDF</button> `:''}${x.status==='void'?'Void: '+esc(x.void_reason||''):(jobCan('costs.enter')?`<button class="btn-ghost" style="padding:3px 8px" onclick="poVoidInvoice('${x.id}')">Void</button>`:'')}</td></tr>`; }).join('');
   const b=[];
   if(!isNew && p.status!=='draft') b.push(`<button class="btn-ghost" onclick="poDownloadPdf()">⬇ PDF</button>`);
   if(!isNew && p.status==='draft' && PEDIT.lines.length) b.push(`<button class="btn-ghost" onclick="poPreviewPdf()">Preview PDF</button>`);
@@ -6556,12 +6556,20 @@ function poInvoiceForm(){
         <div class="fld"><label>VAT</label><input id="iv_vat" type="number" step="0.01" min="0" oninput="poInvTotals()"></div>
         <div class="fld"><label>Total</label><input id="iv_tot" disabled></div></div>
       <div class="fld"><label>Note</label><input id="iv_note" placeholder="Optional"></div>
-      <div class="muted" style="font-size:12px">Each amount goes against its PO line’s cost code on the job. A credit note can be entered as a negative amount.</div>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:4px 0 8px">
+        <label style="display:flex;gap:7px;align-items:center;font-size:13px"><input type="checkbox" id="iv_paid" style="width:auto" onchange="el('iv_pdw').style.display=this.checked?'flex':'none'"> Already paid (cash / card / paid upfront)</label>
+        <div id="iv_pdw" style="display:none;gap:6px;align-items:center;font-size:13px">Paid on <input id="iv_pdate" type="date" style="width:auto" value="${ymd(new Date())}"></div></div>
+      <div class="muted" style="font-size:12px">Each amount goes against its PO line’s cost code on the job. A credit note can be entered as a negative amount. An invoice marked already paid goes to Xero approved and marked paid.</div>
     </div>
     <div class="modal-foot"><button class="btn-ghost" onclick="el('invModal').remove()">Cancel</button><button class="btn" id="ivSave" onclick="poSaveInvoice()">Save invoice</button></div>
     <div class="savemsg" id="invMsg" style="padding:0 18px 14px"></div></div>`;
   document.body.appendChild(box);
   poInvTotals();
+}
+/* supplier invoice payment status: Paid / Part paid / Unpaid (kept up to date from Xero) */
+function siPayChip(x){
+  const st=x.payment_status||'unpaid', lab={paid:'Paid',part_paid:'Part paid',unpaid:'Unpaid'}[st]||st, col={paid:'green',part_paid:'amber',unpaid:'grey'}[st]||'grey';
+  return `<span class="chip ${col}" title="${x.paid_upfront?'Paid upfront':'From Xero'}">${lab}</span>${st==='paid'&&x.paid_date?`<div class="muted" style="font-size:11px">${x.paid_upfront?'upfront · ':''}${jobDate(x.paid_date)}</div>`:''}`;
 }
 function poInvTotals(){
   const cur=PEDIT.p.currency; let net=0; document.querySelectorAll('.inv-line').forEach(i=>net+=Number(i.value||0));
@@ -6580,7 +6588,9 @@ async function poSaveInvoice(){
   const f=el('iv_file').files[0]; if(f && f.size>25*1024*1024) return say('That file is over 25 MB.');
   const b=el('ivSave'); b.disabled=true; say('Saving…');
   const vat=el('iv_vat').value;
-  const r=await sb.from('supplier_invoices').insert({po_id:p.id, invoice_no:no, invoice_date:date, vat_amount:vat===''?null:Number(vat), note:el('iv_note').value.trim()||null}).select().single();
+  const paidUp=!!(el('iv_paid')&&el('iv_paid').checked), pdate=paidUp?(el('iv_pdate').value||date):null;
+  const r=await sb.from('supplier_invoices').insert({po_id:p.id, invoice_no:no, invoice_date:date, vat_amount:vat===''?null:Number(vat), note:el('iv_note').value.trim()||null,
+    paid_upfront:paidUp, payment_status:paidUp?'paid':'unpaid', paid_date:pdate}).select().single();
   if(r.error){ b.disabled=false; return say('Not saved: '+poFriendlyError(r.error)); }
   const r2=await sb.from('supplier_invoice_lines').insert(lines.map(l=>({invoice_id:r.data.id, po_line_id:l.po_line_id, amount:l.amount, cost_code:(PEDIT.lines.find(x=>x.id===l.po_line_id)||{}).cost_code}))).select();
   if(r2.error){ b.disabled=false; return say('Invoice saved but its amounts were not: '+poFriendlyError(r2.error)); }
@@ -7505,14 +7515,14 @@ TITLES.xero='Send to Xero';
 const XO_TYPES=[['invoice','Customer invoices','Sent as draft sales invoices for you to approve in Xero'],
   ['purchase_order','Purchase orders','So accounts can see every PO in Xero'],
   ['bill','Supplier invoices → draft bills','Entered against POs; sent as draft bills'],
-  ['po_billed','POs to mark as Billed','Fully invoiced here; marks Xero’s copy as Billed'],
+  ['po_billed','POs to mark as Billed that need fixing','Fully invoiced POs are marked Billed in Xero automatically — these can’t go until the problem shown is fixed'],
   ['quote','Quotes that need fixing','Quotes go to Xero automatically every 15 minutes — these can’t go until the problem shown is fixed'],
   ['quote_status','Won or lost quotes that need fixing','Marked Accepted or Declined in Xero automatically — these can’t go until the problem shown is fixed']];
 const XO_STATUS={queued:['Queued','cyan'],sending:['Sending','cyan'],sent:['In Xero','green'],failed:['Failed','red'],withdrawn:['Taken back','grey'],in_xero:['Already in Xero','violet']};
 const xoKey=(t,id,r)=>t+'|'+id+(r!=null?'|'+r:'');
-/* Quotes (new versions and won/lost) go to Xero automatically every 15 minutes, so
+/* Quotes (new versions and won/lost) and "mark PO as Billed" go to Xero automatically every 15 minutes, so
    they only appear in To check when something needs fixing first. */
-const XO_AUTO_TYPES=['quote','quote_status'];
+const XO_AUTO_TYPES=['quote','quote_status','po_billed'];
 const xoAutoItem=o=>XO_AUTO_TYPES.includes(o.item_type)&&o.can_send;
 function xoUser(id){ const l=(LOGINS||[]).find(x=>x.id===id); return l?l.email:''; }
 function xoSettings(e){ return (XO&&XO.settings||[]).find(s=>s.entity_code===(e||XO_ENT))||{}; }
@@ -7560,8 +7570,9 @@ function pageXero(){
 /* ---------- To check ---------- */
 function xoCheckHtml(){
   const na=(XO.outboxAuto||[]).length;
-  const autoNote=na?`<div class="card" style="padding:10px 14px;margin-bottom:12px;font-size:13px">🔄 <b>${na}</b> quote${na===1?'':'s'} will go to Xero automatically within 15 minutes${jobCan('xero.send')?' — or click <b>Check Xero now</b> to send straight away':''}.</div>`:'';
-  if(!XO.outbox.length) return autoNote+`<div class="card" style="padding:18px">${emptyState('✅','Nothing waiting','New POs, supplier invoices and billing stages marked ready will appear here. Quotes go to Xero automatically.')}</div>`;
+  const nq=(XO.outboxAuto||[]).filter(o=>o.item_type!=='po_billed').length, nb=na-nq;
+  const autoNote=na?`<div class="card" style="padding:10px 14px;margin-bottom:12px;font-size:13px">🔄 ${[nq?`<b>${nq}</b> quote${nq===1?'':'s'}`:'',nb?`<b>${nb}</b> PO${nb===1?'':'s'} to mark as Billed`:''].filter(Boolean).join(' and ')} will go to Xero automatically within 15 minutes${jobCan('xero.send')?' — or click <b>Check Xero now</b> to send straight away':''}.</div>`:'';
+  if(!XO.outbox.length) return autoNote+`<div class="card" style="padding:18px">${emptyState('✅','Nothing waiting','New POs, supplier invoices and billing stages marked ready will appear here. Quotes, and POs to mark as Billed, go to Xero automatically.')}</div>`;
   const can=jobCan('xero.send');
   const sec=XO_TYPES.map(([t,title,sub])=>{
     const rows=XO.outbox.filter(o=>o.item_type===t); if(!rows.length) return '';
@@ -7963,6 +7974,7 @@ function xoSettingsHtml(){
       <div class="frow">${f(s,'start_date','Send from (items before this date are not listed)','date')}${f(s,'tracking_category','Tracking category for the job ref (optional)','','e.g. Job')}</div>
       <div class="frow">${f(s,'sales_account_code','Sales account code','','e.g. 200')}${f(s,'sales_tax_type','Sales tax rate (Xero code)','','e.g. OUTPUT2')}${f(s,'invoice_due_days','Invoice due (days)','number')}</div>
       <div class="frow">${f(s,'purchases_account_code','Default purchases account code','','e.g. 310')}${f(s,'purchase_tax_type','Purchases tax rate (Xero code)','','e.g. INPUT2')}${f(s,'bill_due_days','Bill due (days)','number')}</div>
+      <div class="frow">${f(s,'paid_upfront_account_code','“Already paid” supplier invoices are paid from (Xero bank account code)','','e.g. 090')}</div>
       ${ed?`<div style="text-align:right"><button class="btn" onclick="xoSaveSettings('${s.entity_code}')">Save ${esc(s.entity_code)}</button></div>`:''}</div>`).join('');
   const codes=`<div class="card" style="padding:12px 14px"><div style="font-weight:700;margin-bottom:4px">Xero account per cost code</div><div class="muted" style="font-size:12.5px;margin-bottom:8px">Leave blank to use the company’s default purchases account.</div>
     <table class="tbl"><tbody>${(XO.codes||[]).map(c=>`<tr><td style="width:90px"><b>${esc(c.code)}</b></td><td>${esc(c.name)}</td><td style="width:160px"><input id="xc_${esc(c.code)}" value="${esc(c.xero_account_code||'')}" ${codeEd?'':'disabled'} placeholder="default"></td></tr>`).join('')}</tbody></table>
@@ -7974,6 +7986,7 @@ async function xoSaveSettings(e){
   const row={enabled:el(`xs_${e}_enabled`).checked, start_date:v('start_date')||null, tracking_category:v('tracking_category')||null,
     sales_account_code:v('sales_account_code')||null, sales_tax_type:v('sales_tax_type')||null, invoice_due_days:Number(v('invoice_due_days')||30),
     purchases_account_code:v('purchases_account_code')||null, purchase_tax_type:v('purchase_tax_type')||null, bill_due_days:Number(v('bill_due_days')||30),
+    paid_upfront_account_code:v('paid_upfront_account_code')||null,
     updated_at:new Date().toISOString()};
   const r=await sb.from('xero_settings').update(row).eq('entity_code',e).select();
   if(r.error||!r.data||!r.data.length) return msg('Not saved: '+(r.error?poFriendlyError(r.error):'only a Director can change these'),'err');
@@ -8385,7 +8398,7 @@ function siTableHtml(){
         <td>${esc(poSupplier(i.supplier_id).name||'—')}</td><td style="white-space:nowrap"><a href="#" onclick="event.preventDefault();openPO('${i.po_id}')">${esc(po.po_ref||'')}</a></td>
         <td>${esc(j.job_ref||'')}<div class="muted" style="font-size:11.5px">${esc(j.title||'')}</div></td>
         <td style="white-space:nowrap">${jobDate(i.invoice_date)}</td><td style="text-align:right;white-space:nowrap">${jobMoney(i.net_amount,cur)}</td><td style="text-align:right;white-space:nowrap">${i.vat_amount!=null?jobMoney(i.vat_amount,cur):'—'}</td>
-        <td>${i.status==='void'?`<span class="chip grey">Void</span><div class="muted" style="font-size:11px">${esc(i.void_reason||'')}</div>`:'<span class="chip green">Entered</span>'}${i.xero_bill_id?'<div class="muted" style="font-size:11px">In Xero</div>':''}</td>
+        <td>${i.status==='void'?`<span class="chip grey">Void</span><div class="muted" style="font-size:11px">${esc(i.void_reason||'')}</div>`:siPayChip(i)}${i.xero_bill_id?'<div class="muted" style="font-size:11px">In Xero</div>':''}</td>
         <td style="white-space:nowrap;text-align:right">${pdf?`<button class="btn-ghost" style="padding:4px 9px" onclick="siOpenPdf('${i.id}')">PDF</button> `:''}<button class="btn-ghost" style="padding:4px 9px" onclick="openPO('${i.po_id}')">Open PO</button></td></tr>`; }).join('')}
     ${Object.keys(tot).sort().map(c=>`<tr><td colspan="5"><b>Total ${esc(c)} (entered)</b></td><td style="text-align:right"><b>${jobMoney(tot[c].net,c)}</b></td><td style="text-align:right"><b>${jobMoney(tot[c].vat,c)}</b></td><td colspan="2"></td></tr>`).join('')}</tbody></table></div>`;
 }
