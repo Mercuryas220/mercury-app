@@ -7759,7 +7759,8 @@ function xoContactsHtml(){
   const clients=(CLIENTS||[]).slice().sort((a,b)=>a.name.localeCompare(b.name)), sups=(XO.sups||[]).filter(s=>(s.status||'Active')!=='Inactive');
   return `<div class="card fld" style="padding:10px 12px;margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       ${ents.length>1?`<select style="width:auto" onchange="XO_ENT=this.value;go('xero')">${ents.map(e=>`<option ${e===XO_ENT?'selected':''}>${e}</option>`).join('')}</select>`:`<b>${esc(XO_ENT)} Xero</b>`}
-      <span class="muted" style="font-size:12.5px">Link each client and supplier to its contact in Xero, using the name exactly as it appears in Xero. Once connected, the names are matched automatically and you will pick from Xero’s list.</span></div>
+      <span class="muted" style="font-size:12.5px;flex:1">Link each client and supplier to its contact in Xero. Use <b>Search Xero</b> in Link… to pick from Xero’s list, or match everyone at once.</span>
+      ${can&&xoConnected(XO_ENT)?`<button class="btn" style="width:auto" onclick="xoMatchAll('${XO_ENT}')">Match all with Xero</button>`:''}</div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px">
       <div class="card" style="padding:8px 10px"><div style="font-weight:700;margin:4px">Clients</div><table class="tbl"><tbody>${list('client',clients)||'<tr><td class="muted">No clients</td></tr>'}</tbody></table></div>
       <div class="card" style="padding:8px 10px"><div style="font-weight:700;margin:4px">Suppliers</div><table class="tbl"><tbody>${list('supplier',sups)||'<tr><td class="muted">No suppliers</td></tr>'}</tbody></table></div></div>`;
@@ -7813,6 +7814,99 @@ function xoPickContact(i,inputId,resultsId){
 }
 /* the Xero contact id to save, if the name still matches what was picked */
 function xoPickedId(entity,name){ const p=XO_PICK.picked; return p&&p.id&&p.entity===entity&&p.name===name?p.id:null; }
+
+/* ---------- Link an EXISTING client / supplier to Xero (from its own page) ---------- */
+let XO_LE=null;
+async function xoLinkEdit(t,id,name,after){
+  const [st,lk]=await Promise.all([
+    sb.from('xero_settings').select('entity_code,enabled,connected_at').eq('enabled',true).order('entity_code'),
+    sb.from('xero_contact_links').select('*').eq('party_type',t).eq('party_id',id)]);
+  const ents=st.data||[];
+  if(!ents.length){ alert('Xero isn’t switched on for any company yet (Send to Xero → Settings).'); return; }
+  XO_LE={t,id,name,after,ents,links:lk.data||[]}; XO_PICK={list:[],picked:null};
+  xoLinkEditDraw(ents[0].entity_code);
+}
+function xoLinkEditDraw(e){
+  const L=XO_LE; if(!L) return; L.e=e;
+  const ent=L.ents.find(x=>x.entity_code===e)||{}, l=L.links.find(x=>x.entity_code===e);
+  const mode=l?l.link_mode:'existing';
+  const old=el('xoLinkE'); if(old) old.remove();
+  billModal('xoLinkE',`Xero contact · ${esc(L.name)}`,
+    `${L.ents.length>1?`<div class="fld"><label>Company</label><select onchange="xoLinkEditDraw(this.value)">${L.ents.map(x=>`<option ${x.entity_code===e?'selected':''}>${x.entity_code}</option>`).join('')}</select></div>`:''}
+     <div class="muted" style="font-size:12.5px;margin-bottom:8px">Now: ${l?(l.link_mode==='create'?'will be created as a new contact in Xero':'linked to <b>'+esc(l.xero_contact_name||'')+'</b>'):'not linked'}</div>
+     <label style="display:flex;gap:8px;align-items:center;font-size:13.5px;margin-bottom:6px"><input type="radio" name="xle_mode" value="existing" style="width:auto" ${mode!=='create'?'checked':''}> Already in ${esc(e)} Xero, named:</label>
+     <div class="fld" style="display:flex;gap:6px"><input id="xle_name" value="${esc(l&&l.link_mode==='existing'?l.xero_contact_name||'':L.name)}" placeholder="Name exactly as in Xero">${ent.connected_at?`<button class="btn-ghost" style="width:auto;white-space:nowrap" onclick="xoSearchXero('${e}','xle_name','xle_results')">Search Xero</button>`:''}</div>
+     <div id="xle_results" style="margin:-4px 0 8px"></div>
+     <label style="display:flex;gap:8px;align-items:center;font-size:13.5px"><input type="radio" name="xle_mode" value="create" style="width:auto" ${mode==='create'?'checked':''}> Not in Xero yet — create it as “${esc(L.name)}” when first sent</label>`,
+    `${l?`<button class="btn-ghost" style="color:var(--red)" onclick="xoLinkEditRemove('${l.id}')">Remove link</button>`:''}<button class="btn-ghost" onclick="el('xoLinkE').remove()">Cancel</button><button class="btn" onclick="xoLinkEditSave()">Save</button>`);
+}
+async function xoLinkEditSave(){
+  const L=XO_LE, e=L.e, mode=document.querySelector('input[name="xle_mode"]:checked').value, nm=el('xle_name').value.trim();
+  if(mode==='existing'&&!nm) return billSay('xoLinkE','Enter (or search for) the contact’s name as it appears in Xero.');
+  const ex=L.links.find(x=>x.entity_code===e);
+  const keepId=ex&&ex.link_mode==='existing'&&ex.xero_contact_name===nm?ex.xero_contact_id:null;
+  const row={entity_code:e,party_type:L.t,party_id:L.id,link_mode:mode,xero_contact_name:mode==='existing'?nm:null,xero_contact_id:mode==='existing'?(xoPickedId(e,nm)||keepId):null,updated_at:new Date().toISOString()};
+  const r=ex?await sb.from('xero_contact_links').update(row).eq('id',ex.id).select():await sb.from('xero_contact_links').insert(row).select();
+  if(r.error||!r.data||!r.data.length) return billSay('xoLinkE','Not saved: '+(r.error?poFriendlyError(r.error):'no permission'));
+  el('xoLinkE').remove(); if(typeof XO!=='undefined') XO=null; if(L.after) L.after();
+}
+async function xoLinkEditRemove(lid){
+  if(!confirm('Remove this Xero link? Items for this contact will wait until it is linked again.')) return;
+  const r=await sb.from('xero_contact_links').delete().eq('id',lid).select();
+  if(r.error) return billSay('xoLinkE','Not removed: '+poFriendlyError(r.error));
+  el('xoLinkE').remove(); if(typeof XO!=='undefined') XO=null; if(XO_LE&&XO_LE.after) XO_LE.after();
+}
+/* supplier page: Xero link box (filled in after the page draws) */
+async function supXeroFill(id){
+  const box=el('supXeroBox'); if(!box) return;
+  const [st,lk]=await Promise.all([
+    sb.from('xero_settings').select('entity_code').eq('enabled',true),
+    sb.from('xero_contact_links').select('*').eq('party_type','supplier').eq('party_id',id)]);
+  if(!el('supXeroBox')) return;
+  if(!(st.data||[]).length){ box.innerHTML=''; return; }
+  const ls=lk.data||[], s=(SUPPLIERS||[]).find(x=>x.id===id)||{};
+  box.innerHTML=`<div class="note" style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div style="flex:1">Xero contact: ${ls.length?ls.map(l=>l.link_mode==='create'?`<i>new contact</i> (${esc(l.entity_code)})`:`<b>${esc(l.xero_contact_name||'')}</b> (${esc(l.entity_code)})`).join(', '):'not linked yet'}</div>
+    ${jobCan('xero.send')?`<button class="btn-ghost" style="padding:4px 10px" onclick="xoLinkEdit('supplier','${id}','${esc(s.name||'').replace(/'/g,'')}',()=>supXeroFill('${id}'))">${ls.length?'Change':'Link to Xero'}</button>`:''}</div>`;
+}
+
+/* ---------- Match all with Xero (Xero contacts tab) ---------- */
+let XO_MATCH=null;
+const xoNorm=n=>String(n||'').toLowerCase().replace(/\./g,'').replace(/&/g,' and ').replace(/[^a-z0-9 ]/g,' ').replace(/\b(ltd|limited|plc|llp|inc|the)\b/g,' ').replace(/\s+/g,' ').trim();
+async function xoMatchAll(e){
+  XO_RUN={ok:true,message:'Reading every contact in Xero…'}; go('xero');
+  const out=await xoInvoke('xero-sender',{action:'allContacts',entity:e});
+  if(!out.ok){ XO_RUN={ok:false,message:out.message||'Could not read Xero contacts.'}; go('xero'); return; }
+  XO_RUN=null;
+  const byNorm={}; (out.contacts||[]).forEach(c=>{ const k=xoNorm(c.name); (byNorm[k]=byNorm[k]||[]).push(c); });
+  const parties=[...(CLIENTS||[]).map(p=>({t:'client',id:p.id,name:p.name})),...(XO.sups||[]).filter(s=>(s.status||'Active')!=='Inactive').map(p=>({t:'supplier',id:p.id,name:p.name}))]
+    .filter(p=>!xoLink(e,p.t,p.id));
+  const matched=[], none=[];
+  parties.forEach(p=>{ const hits=byNorm[xoNorm(p.name)]||[]; if(hits.length===1) matched.push({...p,x:hits[0]}); else none.push({...p,many:hits.length>1}); });
+  XO_MATCH={e,demo:!!out.isDemo,matched,none};
+  const row=(m,i)=>`<label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0"><input type="checkbox" class="xom_chk" data-i="${i}" style="width:auto" checked> ${esc(m.name)} <span class="muted">(${m.t})</span> → <b>${esc(m.x.name)}</b></label>`;
+  billModal('xoMatchM',`Match with ${esc(e)} Xero`,
+    `<div class="muted" style="font-size:12.5px;margin-bottom:8px">${parties.length} client${parties.length===1?'':'s'} and supplier${parties.length===1?'':'s'} aren’t linked yet. Already-linked ones are left as they are.</div>
+     <div style="font-weight:700;margin-bottom:4px">Found in Xero (${matched.length})</div>
+     <div style="max-height:260px;overflow:auto;margin-bottom:10px">${matched.map(row).join('')||'<div class="muted" style="font-size:12.5px">None found by name.</div>'}</div>
+     ${none.length?`<div style="font-weight:700;margin-bottom:4px">Not found in Xero (${none.length})</div>
+     <div class="muted" style="font-size:12px;max-height:120px;overflow:auto;margin-bottom:6px">${none.map(p=>esc(p.name)+(p.many?' (more than one possible match)':'')).join(' · ')}</div>
+     <label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="radio" name="xom_none" value="leave" style="width:auto" checked> Leave these unlinked for now (link them one by one)</label>
+     <label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="radio" name="xom_none" value="create" style="width:auto"> Set these to be created as new contacts in Xero when first sent</label>`:''}`,
+    `<button class="btn-ghost" onclick="el('xoMatchM').remove()">Cancel</button><button class="btn" onclick="xoMatchSave()">Save links</button>`);
+}
+async function xoMatchSave(){
+  const M=XO_MATCH; if(!M) return; const now=new Date().toISOString();
+  const ticked=[...document.querySelectorAll('.xom_chk')].filter(c=>c.checked).map(c=>M.matched[+c.dataset.i]);
+  const rows=ticked.map(m=>({entity_code:M.e,party_type:m.t,party_id:m.id,link_mode:'existing',xero_contact_name:m.x.name,xero_contact_id:M.demo?null:m.x.id,updated_at:now}));
+  const nm=(document.querySelector('input[name="xom_none"]:checked')||{}).value;
+  if(nm==='create') M.none.forEach(p=>rows.push({entity_code:M.e,party_type:p.t,party_id:p.id,link_mode:'create',xero_contact_name:null,xero_contact_id:null,updated_at:now}));
+  if(!rows.length){ el('xoMatchM').remove(); return; }
+  for(let i=0;i<rows.length;i+=200){
+    const r=await sb.from('xero_contact_links').insert(rows.slice(i,i+200)).select();
+    if(r.error) return billSay('xoMatchM','Not all saved: '+poFriendlyError(r.error));
+  }
+  el('xoMatchM').remove(); XO_RUN={ok:true,message:`✓ ${rows.length} link${rows.length===1?'':'s'} saved.`}; xoReload();
+}
 
 let XO_SETUP=null;
 function xoSetupHtml(){ return jobCan('xero.send')?'<div id="xoSetupBox"></div>':''; }
@@ -8553,7 +8647,8 @@ function clDetailsHtml(){
         <div class="fld"><label>Accounts email</label><input id="ca_accem" type="email" ${dis} value="${esc(a.accounts_email||'')}"></div></div>
       <div class="frow"><div class="fld"><label>VAT number</label><input id="ca_vat" ${dis} value="${esc(a.vat_number||'')}"></div>
         <div class="fld"><label>&nbsp;</label><label style="display:flex;gap:7px;align-items:center;font-size:13px"><input type="checkbox" id="ca_po" ${a.po_required?'checked':''} ${dis} style="width:auto"> Client needs a PO before we start</label></div></div>
-      <div class="note" style="margin-top:4px">Xero contact: ${x.length?x.map(l=>`<b>${esc(l.xero_contact_name||l.xero_contact_id)}</b> (${esc(l.entity_code)})`).join(', '):'not linked yet'}. Once Xero is connected, Xero will hold the billing details and they will show here read-only.</div>
+      <div class="note" style="margin-top:4px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div style="flex:1">Xero contact: ${CREC.d.xero.length?CREC.d.xero.map(l=>l.link_mode==='create'?`<i>new contact</i> (${esc(l.entity_code)})`:`<b>${esc(l.xero_contact_name||l.xero_contact_id)}</b> (${esc(l.entity_code)})`).join(', '):'not linked yet'}</div>
+        ${jobCan('xero.send')&&!clLocked()?`<button class="btn-ghost" style="padding:4px 10px" onclick="xoLinkEdit('client','${c.id}','${esc(c.name||'').replace(/'/g,'')}',()=>clLoadRec())">${CREC.d.xero.length?'Change':'Link to Xero'}</button>`:''}</div>
     </div></div>
     <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
       ${ed?`<button class="btn" id="caSave" style="width:auto" onclick="clSaveDetails()">Save details</button>`:''}
@@ -10613,6 +10708,7 @@ function supDetailsHtml(s){
       <div class="frow">${f('sd_terms','Payment terms',s.payment_terms)}<div class="fld"><label>Currency</label><select id="sd_cur">${['GBP','EUR','USD'].map(c=>`<option ${c===(s.default_currency||'GBP')?'selected':''}>${c}</option>`).join('')}</select></div></div></div>
     <div class="card"><h4 style="margin:0 0 10px">Contact</h4>${f('sd_cn','Contact name',s.contact_name)}<div class="frow">${f('sd_em','Email',s.contact_email,'email')}${f('sd_ph','Phone',s.contact_phone)}</div>
       <div class="fld"><label>Notes (internal)</label><textarea id="sd_notes" rows="3">${esc(s.notes||'')}</textarea></div>
+      <div id="supXeroBox"></div>${(setTimeout(()=>supXeroFill(s.id),0),'')}
       ${chg.length?`<h4 style="margin:12px 0 6px">Change requests from the supplier</h4>${chg.map(c=>`<div class="litem"><div class="bd"><div class="t">${esc(c.request)}</div><div class="m">${jobDate(String(c.created_at).slice(0,10))} · ${c.status==='open'?'<span class="chip amber">Open</span>':'<span class="chip green">Done</span>'}</div></div>${c.status==='open'?`<button class="edit-btn" onclick="supChgDone('${c.id}')">Mark done</button>`:''}</div>`).join('')}`:''}</div></div>
     ${s.archived_at?'':`<div style="display:flex;gap:10px;align-items:center;margin-top:12px"><button class="btn" id="sdSave" style="width:auto" onclick="supSaveDetails()">Save details</button><span class="savemsg" id="sdMsg"></span></div>`}`;
 }
