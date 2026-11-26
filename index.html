@@ -7494,10 +7494,14 @@ const XO_TYPES=[['invoice','Customer invoices','Sent as draft sales invoices for
   ['purchase_order','Purchase orders','So accounts can see every PO in Xero'],
   ['bill','Supplier invoices → draft bills','Entered against POs; sent as draft bills'],
   ['po_billed','POs to mark as Billed','Fully invoiced here; marks Xero’s copy as Billed'],
-  ['quote','Quotes','Every issued version, each as its own Xero quote: Q-UK-0014, Q-UK-0014 Rev 1, Rev 2 …'],
-  ['quote_status','Quotes won or lost','Marks the Xero quote Accepted or Declined']];
+  ['quote','Quotes that need fixing','Quotes go to Xero automatically every 15 minutes — these can’t go until the problem shown is fixed'],
+  ['quote_status','Won or lost quotes that need fixing','Marked Accepted or Declined in Xero automatically — these can’t go until the problem shown is fixed']];
 const XO_STATUS={queued:['Queued','cyan'],sending:['Sending','cyan'],sent:['In Xero','green'],failed:['Failed','red'],withdrawn:['Taken back','grey'],in_xero:['Already in Xero','violet']};
 const xoKey=(t,id,r)=>t+'|'+id+(r!=null?'|'+r:'');
+/* Quotes (new versions and won/lost) go to Xero automatically every 15 minutes, so
+   they only appear in To check when something needs fixing first. */
+const XO_AUTO_TYPES=['quote','quote_status'];
+const xoAutoItem=o=>XO_AUTO_TYPES.includes(o.item_type)&&o.can_send;
 function xoUser(id){ const l=(LOGINS||[]).find(x=>x.id===id); return l?l.email:''; }
 function xoSettings(e){ return (XO&&XO.settings||[]).find(s=>s.entity_code===(e||XO_ENT))||{}; }
 function xoConnected(e){ return !!xoSettings(e).connected_at; }
@@ -7514,7 +7518,7 @@ async function loadXero(){
       sb.from('xero_settings').select('*').order('entity_code').then(r=>{ if(r.error) throw r.error; return r.data||[]; }),
       jobFetchAll(()=>sb.from('suppliers').select('id,name,status').order('name')),
       sb.from('cost_codes').select('*').order('sort_order').then(r=>r.data||[])]);
-    XO={outbox,items,links,settings,sups,codes};
+    XO={outbox:outbox.filter(o=>!xoAutoItem(o)),outboxAuto:outbox.filter(xoAutoItem),items,links,settings,sups,codes};
     const live=new Set(outbox.map(o=>xoKey(o.item_type,o.source_id,o.source_rev))); XO_SEL=new Set([...XO_SEL].filter(k=>live.has(k)));
   }catch(e){ XO_ERR=e.message||String(e); XO=null; }
   XO_LOADING=false;
@@ -7532,7 +7536,7 @@ function pageXero(){
   const queued=XO.items.filter(i=>['queued','sending','failed'].includes(i.status)).length;
   const tab=(k,l,n)=>`<button class="${XO_TAB===k?'btn':'btn-ghost'}" style="width:auto;padding:7px 14px" onclick="XO_TAB='${k}';go('xero')">${l}${n?` <span class="nav-badge" style="position:static;margin-left:4px">${n}</span>`:''}</button>`;
   const anyConn=on.some(s=>s.connected_at);
-  const head=`<div class="sechead"><h3>🔄 Send to Xero</h3><span class="sub">Check each item, tick it, then send. Nothing goes to Xero automatically.</span><span class="line"></span>${jobCan('xero.send')&&anyConn?`<button class="btn-ghost" ${XO_RUNNING?'disabled':''} onclick="xoRun('sync',{},'Check Xero now for payments, deletions, amount changes and credit notes?')" title="Also runs automatically every 15 minutes">Check Xero now</button>`:''}<button class="btn-ghost" onclick="xoReload()">Refresh</button></div>
+  const head=`<div class="sechead"><h3>🔄 Send to Xero</h3><span class="sub">Check each item, tick it, then send. Nothing goes to Xero automatically.</span><span class="line"></span>${jobCan('xero.send')&&anyConn?`<button class="btn-ghost" ${XO_RUNNING?'disabled':''} onclick="xoRun('sync',{},'Check Xero now? This sends any new quotes, and picks up payments, deletions, amount changes and credit notes.')" title="Also runs automatically every 15 minutes">Check Xero now</button>`:''}<button class="btn-ghost" onclick="xoReload()">Refresh</button></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${conn}</div>${xoNoticeHtml()}${xoResultHtml()}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${tab('check','To check',XO.outbox.length)}${tab('queue','Queued',queued)}${tab('done','Sent & history')}${tab('contacts','Xero contacts')}${tab('settings','Settings')}</div>`;
   let body='';
@@ -7543,7 +7547,9 @@ function pageXero(){
 
 /* ---------- To check ---------- */
 function xoCheckHtml(){
-  if(!XO.outbox.length) return `<div class="card" style="padding:18px">${emptyState('✅','Nothing waiting','Issued quotes, new POs, supplier invoices and billing stages marked ready will appear here.')}</div>`;
+  const na=(XO.outboxAuto||[]).length;
+  const autoNote=na?`<div class="card" style="padding:10px 14px;margin-bottom:12px;font-size:13px">🔄 <b>${na}</b> quote${na===1?'':'s'} will go to Xero automatically within 15 minutes${jobCan('xero.send')?' — or click <b>Check Xero now</b> to send straight away':''}.</div>`:'';
+  if(!XO.outbox.length) return autoNote+`<div class="card" style="padding:18px">${emptyState('✅','Nothing waiting','New POs, supplier invoices and billing stages marked ready will appear here. Quotes go to Xero automatically.')}</div>`;
   const can=jobCan('xero.send');
   const sec=XO_TYPES.map(([t,title,sub])=>{
     const rows=XO.outbox.filter(o=>o.item_type===t); if(!rows.length) return '';
@@ -7561,7 +7567,7 @@ function xoCheckHtml(){
         ${can&&sendable.length?`<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" style="width:auto" ${allOn?'checked':''} onchange="xoTickAll('${t}',this.checked)"> Tick all ready (${sendable.length})</label>`:''}</div>
       <table class="tbl xo_tbl" data-type="${t}"><thead><tr><th></th><th>Reference</th><th>Contact</th><th>Date</th><th style="text-align:right">Net</th><th>Checks</th><th></th></tr></thead><tbody>${tr}</tbody></table></div>`; }).join('');
   const n=XO_SEL.size;
-  return sec+(can?`<div class="card" style="padding:12px 14px;position:sticky;bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;box-shadow:0 6px 24px rgba(0,0,0,.35)">
+  return autoNote+sec+(can?`<div class="card" style="padding:12px 14px;position:sticky;bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;box-shadow:0 6px 24px rgba(0,0,0,.35)">
       <div style="flex:1" id="xoSelText">${n?`<b>${n}</b> item${n===1?'':'s'} ticked`:'Tick the items you have checked.'}</div>
       <button class="btn" id="xoReview" style="width:auto;padding:9px 22px" ${n?'':'disabled'} onclick="xoReview()">Review &amp; send…</button></div>`:'');
 }
@@ -7636,9 +7642,9 @@ let XO_RUN=null, XO_RUNNING=false, XO_NOTICE=null, XO_RETURN_DONE=false;
 function xoWhen(ts){ if(!ts) return ''; const d=new Date(ts); if(isNaN(d)) return jobDate(ts); return d.toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).replace(',',''); }
 /* who did what, and when, for one queue / history row */
 function xoWhoWhen(i){
-  const line=(label,ts,who)=>ts?`<div><span class="muted">${label}</span> ${xoWhen(ts)}${who?' · '+esc(xoUser(who)):''}</div>`:'';
+  const line=(label,ts,who,whoText)=>ts?`<div><span class="muted">${label}</span> ${xoWhen(ts)}${who?' · '+esc(xoUser(who)):(whoText?' · '+whoText:'')}</div>`:'';
   const closedLabel={withdrawn:i.reason==='Retried'?'Retried':(/in Xero/i.test(i.reason||'')?'Removed':'Taken back'),in_xero:i.origin==='xero'?'Picked up from Xero':'Marked as in Xero'}[i.status]||'Closed';
-  return line('Queued',i.queued_at,i.queued_by)
+  return line('Queued',i.queued_at,i.queued_by,!i.queued_by&&i.reason==='Sent automatically'?'<i>Automatic</i>':'')
     +line('Sent to Xero',i.sent_at,null)
     +(i.closed_at?line(closedLabel,i.closed_at,i.closed_by||null):'')
     +(i.checked_at&&i.status==='sent'?line('Last checked',i.checked_at,null):'');
@@ -9882,7 +9888,7 @@ async function homeLoadNow(){
       q(true, ()=>jobFetchAll(()=>sb.from('risks').select('*').neq('risk_status','closed'))),
       q(can('po.view'), ()=>jobFetchAll(()=>sb.from('purchase_orders').select('id,po_ref,job_id,supplier_id,status,required_by').in('status',['open','part_invoiced']))),
       q(can('timesheets.approve'), ()=>jobFetchAll(()=>sb.from('supplier_timesheets').select('id,supplier_id,status,work_date').eq('status','Submitted'))),
-      q(can('xero.send'), ()=>sb.from('xero_outbox').select('item_type,source_id,ref,can_send').then(r=>r.data||[])),
+      q(can('xero.send'), ()=>sb.from('xero_outbox').select('item_type,source_id,ref,can_send').then(r=>(r.data||[]).filter(o=>!xoAutoItem(o)))),
       q(true, ()=>jobFetchAll(()=>sb.from('person_cards').select('id,worker_id,card_type,expiry').is('archived_at',null).lte('expiry',ymd(new Date(Date.now()+7*86400000))))),
       q(true, ()=>sb.from('gps_events').select('*').order('event_at',{ascending:false}).limit(500).then(r=>r.data||[])),
       q(true, ()=>jobFetchAll(()=>sb.from('supplier_documents').select('id,supplier_id,label,doc_type,expiry').lte('expiry',ymd(new Date(Date.now()+7*86400000)))))]);
