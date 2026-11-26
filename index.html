@@ -2544,11 +2544,13 @@ function openClientForm(clientId){
       <div class="fld"><label>System reference (optional)</label><input id="c_sys" value="${esc(c.system_ref||'')}" placeholder="e.g. AMZ-EU-7:3-V12"></div>
       <div class="fld"><label>Logo image URL (optional)</label><input id="c_logo" value="${esc(c.logo_url||'')}" placeholder="https://… (or upload below)"></div>
       <div class="fld"><label>…or upload a logo</label><input id="c_logofile" type="file" accept="image/*"></div>
+      ${clientId?'':xoSetupHtml()}
     </div>
     <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="cliSave" onclick="submitClient(${clientId?`'${clientId}'`:'null'})">${clientId?'Save changes':'Add client'}</button></div>
     <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div>
   </div>`;
   document.body.appendChild(wrap);
+  if(!clientId) xoSetupInit('client','c_name');
 }
 async function submitClient(clientId){
   const name=val('c_name'); if(!name){ msg('Please enter a client name.','err'); return; }
@@ -2558,8 +2560,10 @@ async function submitClient(clientId){
   const lf=el('c_logofile');
   if(lf && lf.files && lf.files[0]){ btn.textContent='Uploading logo…'; try{ const f=lf.files[0]; const path='logos/'+slug+'_'+Date.now()+'.'+(f.name.split('.').pop()||'png'); const {error}=await sb.storage.from('evidence').upload(path,f,{upsert:true}); if(!error) logo=sb.storage.from('evidence').getPublicUrl(path).data.publicUrl; }catch(e){} }
   const row={ name:name, slug:slug, brand_color:val('c_color')||'#38bdf8', programme_title:val('c_prog')||null, system_ref:val('c_sys')||null, logo_url:logo, is_active:true };
-  const res = clientId ? await sb.from('clients').update(row).eq('id',clientId) : await sb.from('clients').insert(row);
+  if(!clientId){ const xe=xoSetupCheck(); if(xe){ btn.disabled=false; btn.textContent='Add client'; msg(xe,'err'); return; } }
+  const res = clientId ? await sb.from('clients').update(row).eq('id',clientId) : await sb.from('clients').insert(row).select().single();
   if(res.error){ btn.disabled=false; btn.textContent=clientId?'Save changes':'Add client'; msg('Could not save: '+res.error.message+(res.error.message.includes('duplicate')?' (that short code is taken — change the slug)':''),'err'); return; }
+  if(!clientId&&res.data){ const xw=await xoSetupSave('client',res.data.id); if(xw) alert(xw); }
   msg('✓ Saved.','ok'); await refreshClients(); if(typeof CLX!=='undefined') CLX=null; setTimeout(()=>{ closeForm(); renderShell(); go(CURRENT==='clientrec'?'clientrec':'clients'); },600);
 }
 
@@ -4300,18 +4304,22 @@ function openSupplierForm(id){
         <div class="fld"><label>Contact phone</label><input id="s_phone" value="${esc(s.contact_phone||'')}" placeholder="Optional"></div>
       </div>
       <div class="fld"><label>Notes</label><textarea id="s_notes" rows="2" placeholder="Optional">${esc(s.notes||'')}</textarea></div>
+      ${id?'':xoSetupHtml()}
     </div>
     <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="supSave" onclick="submitSupplier(${id?`'${id}'`:'null'})">${id?'Save changes':'Add supplier'}</button></div>
     <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div>
   </div>`;
   document.body.appendChild(wrap);
+  if(!id) xoSetupInit('supplier','s_name');
 }
 async function submitSupplier(id){
   const name=val('s_name'); if(!name){ msg('Please enter a supplier name.','err'); return; }
   const btn=el('supSave'); btn.disabled=true; btn.textContent='Saving…'; msg('','');
   const row={ name:name, contact_name:val('s_cname')||null, contact_email:val('s_email')||null, contact_phone:val('s_phone')||null, status:val('s_status')||'Active', notes:val('s_notes')||null };
-  const res = id ? await sb.from('suppliers').update(row).eq('id',id) : await sb.from('suppliers').insert(row);
+  if(!id){ const xe=xoSetupCheck(); if(xe){ btn.disabled=false; btn.textContent='Add supplier'; msg(xe,'err'); return; } }
+  const res = id ? await sb.from('suppliers').update(row).eq('id',id) : await sb.from('suppliers').insert(row).select().single();
   if(res.error){ btn.disabled=false; btn.textContent=id?'Save changes':'Add supplier'; msg('Could not save: '+res.error.message,'err'); return; }
+  if(!id&&res.data){ const xw=await xoSetupSave('supplier',res.data.id); if(xw) alert(xw); }
   msg('✓ Saved.','ok'); await supRefresh('suppliers');
 }
 function openSupLinkLogin(id){
@@ -6420,17 +6428,21 @@ function poNewSupplier(){
       <div class="frow"><div class="fld"><label>Contact name</label><input id="ns_cn"></div><div class="fld"><label>Email (for POs)</label><input id="ns_em" type="email"></div></div>
       <div class="frow"><div class="fld"><label>Phone</label><input id="ns_ph"></div><div class="fld"><label>VAT / tax no.</label><input id="ns_vat"></div></div>
       <div class="fld"><label>Address</label><textarea id="ns_addr" rows="2"></textarea></div>
+      ${xoSetupHtml()}
     </div>
     <div class="modal-foot"><button class="btn-ghost" onclick="el('supModal').remove()">Cancel</button><button class="btn" onclick="poSaveSupplier()">Add supplier</button></div>
     <div class="savemsg" id="supMsg" style="padding:0 18px 14px"></div></div>`;
   document.body.appendChild(box);
+  xoSetupInit('supplier','ns_name');
 }
 async function poSaveSupplier(){
   const v=k=>el(k).value.trim(); const say=(t)=>{ el('supMsg').textContent=t; };
   if(!v('ns_name')) return say('Enter the supplier’s name.');
+  const xe=xoSetupCheck(); if(xe) return say(xe);
   const r=await sb.from('suppliers').insert({name:v('ns_name'), supplier_type:v('ns_type'), contact_name:v('ns_cn')||null, contact_email:v('ns_em')||null,
     contact_phone:v('ns_ph')||null, vat_no:v('ns_vat')||null, address:v('ns_addr')||null, default_currency:v('ns_cur')||null, status:'Active'}).select().single();
   if(r.error) return say('Not saved: '+poFriendlyError(r.error));
+  const xw=await xoSetupSave('supplier',r.data.id); if(xw) alert(xw);
   SUPPLIERS_ALL.push(r.data); SUPPLIERS_ALL.sort((a,b)=>String(a.name).localeCompare(String(b.name)));
   const s=el('pe_sup'); if(s){ s.insertAdjacentHTML('beforeend',`<option value="${r.data.id}">${esc(r.data.name)}</option>`); s.value=r.data.id; }
   el('supModal').remove();
@@ -7753,19 +7765,22 @@ function xoContactsHtml(){
       <div class="card" style="padding:8px 10px"><div style="font-weight:700;margin:4px">Suppliers</div><table class="tbl"><tbody>${list('supplier',sups)||'<tr><td class="muted">No suppliers</td></tr>'}</tbody></table></div></div>`;
 }
 function xoLinkForm(e,t,id){
+  XO_PICK={list:[],picked:null};
   const name=t==='client'?((CLIENTS||[]).find(c=>c.id===id)||{}).name:((XO.sups||[]).find(s=>s.id===id)||{}).name;
   const l=xoLink(e,t,id)||{link_mode:'existing',xero_contact_name:name||''};
   billModal('xoLinkM',`Xero contact · ${esc(name||'')}`,
     `<label style="display:flex;gap:8px;align-items:center;font-size:13.5px;margin-bottom:6px"><input type="radio" name="xl_mode" value="existing" style="width:auto" ${l.link_mode!=='create'?'checked':''}> Already in ${esc(e)} Xero, named:</label>
-     <div class="fld"><input id="xl_name" value="${esc(l.xero_contact_name||'')}" placeholder="Name exactly as in Xero"></div>
+     <div class="fld" style="display:flex;gap:6px"><input id="xl_name" value="${esc(l.xero_contact_name||'')}" placeholder="Name exactly as in Xero">${xoConnected(e)?`<button class="btn-ghost" style="width:auto;white-space:nowrap" onclick="xoSearchXero('${e}','xl_name','xl_results')">Search Xero</button>`:''}</div>
+     <div id="xl_results" style="margin:-4px 0 8px"></div>
      <label style="display:flex;gap:8px;align-items:center;font-size:13.5px"><input type="radio" name="xl_mode" value="create" style="width:auto" ${l.link_mode==='create'?'checked':''}> Not in Xero yet — create it as “${esc(name||'')}” when first sent</label>`,
     `${l.id?`<button class="btn-ghost" style="color:var(--red)" onclick="xoUnlink('${l.id}')">Remove link</button>`:''}<button class="btn-ghost" onclick="el('xoLinkM').remove()">Cancel</button><button class="btn" onclick="xoLinkSave('${e}','${t}','${id}')">Save</button>`);
 }
 async function xoLinkSave(e,t,id){
   const mode=document.querySelector('input[name="xl_mode"]:checked').value, nm=el('xl_name').value.trim();
   if(mode==='existing'&&!nm) return billSay('xoLinkM','Enter the contact’s name as it appears in Xero.');
-  const row={entity_code:e, party_type:t, party_id:id, link_mode:mode, xero_contact_name:mode==='existing'?nm:null, updated_at:new Date().toISOString()};
   const ex=xoLink(e,t,id);
+  const keepId=ex&&ex.link_mode==='existing'&&ex.xero_contact_name===nm?ex.xero_contact_id:null;
+  const row={entity_code:e, party_type:t, party_id:id, link_mode:mode, xero_contact_name:mode==='existing'?nm:null, xero_contact_id:mode==='existing'?(xoPickedId(e,nm)||keepId):null, updated_at:new Date().toISOString()};
   const r=ex?await sb.from('xero_contact_links').update(row).eq('id',ex.id).select():await sb.from('xero_contact_links').insert(row).select();
   if(r.error||!r.data||!r.data.length) return billSay('xoLinkM','Not saved: '+(r.error?poFriendlyError(r.error):'no permission'));
   el('xoLinkM').remove(); const keep=XO_SEL; XO=null; go('xero'); XO_SEL=keep;
@@ -7775,6 +7790,69 @@ async function xoUnlink(id){
   const r=await sb.from('xero_contact_links').delete().eq('id',id).select();
   if(r.error) return billSay('xoLinkM','Not removed: '+poFriendlyError(r.error));
   el('xoLinkM').remove(); xoReload();
+}
+
+/* ---------- Xero contact: search Xero, and link at set-up ----------
+   Used by the Xero contacts tab and by the Add client / Add supplier forms,
+   so a new client or supplier can be linked to Xero straight away. */
+let XO_PICK={list:[],picked:null};
+async function xoSearchXero(entity,inputId,resultsId){
+  const q=(el(inputId)||{}).value||''; const box=el(resultsId); if(!box) return;
+  if(q.trim().length<2){ box.innerHTML='<div class="muted" style="font-size:12px">Type at least 2 letters of the name first.</div>'; return; }
+  box.innerHTML='<div class="muted" style="font-size:12px">Searching Xero…</div>';
+  const out=await xoInvoke('xero-sender',{action:'contacts',entity,q:q.trim()});
+  if(!out.ok){ box.innerHTML=`<div style="color:var(--red);font-size:12px">${esc(out.message||'Search failed')}</div>`; return; }
+  XO_PICK.list=(out.contacts||[]).map(c=>({...c,entity,demo:!!out.isDemo}));
+  box.innerHTML=XO_PICK.list.length?`<div class="muted" style="font-size:12px;margin-bottom:4px">Click the right one:</div>`+XO_PICK.list.map((c,i)=>`<button class="btn-ghost" style="display:block;width:100%;text-align:left;padding:5px 8px;margin-bottom:3px" onclick="xoPickContact(${i},'${inputId}','${resultsId}')">${esc(c.name)}</button>`).join('')
+    :`<div class="muted" style="font-size:12px">Nothing in ${esc(entity)} Xero matches “${esc(q.trim())}”.</div>`;
+}
+function xoPickContact(i,inputId,resultsId){
+  const c=XO_PICK.list[i]; if(!c) return;
+  XO_PICK.picked={name:c.name,id:c.demo?null:c.id,entity:c.entity};  // Demo Company ids are never kept
+  el(inputId).value=c.name; el(resultsId).innerHTML=`<div style="color:var(--green);font-size:12px">✓ Linked to “${esc(c.name)}” in Xero</div>`;
+}
+/* the Xero contact id to save, if the name still matches what was picked */
+function xoPickedId(entity,name){ const p=XO_PICK.picked; return p&&p.id&&p.entity===entity&&p.name===name?p.id:null; }
+
+let XO_SETUP=null;
+function xoSetupHtml(){ return jobCan('xero.send')?'<div id="xoSetupBox"></div>':''; }
+async function xoSetupInit(partyType,nameId){
+  XO_SETUP=null; XO_PICK={list:[],picked:null};
+  const box=el('xoSetupBox'); if(!box) return;
+  const r=await sb.from('xero_settings').select('entity_code,enabled,connected_at,tenant_name').eq('enabled',true).order('entity_code');
+  const ents=r.data||[]; if(!el('xoSetupBox')) return; if(!ents.length){ box.innerHTML=''; return; }
+  XO_SETUP={ents,partyType,nameId};
+  const conn=ents.find(e=>e.connected_at);
+  const radio=(v,label,on)=>`<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin-bottom:5px"><input type="radio" name="xs_mode" value="${v}" style="width:auto;margin-top:2px" ${on?'checked':''} onchange="el('xs_existing').style.display=this.value==='existing'?'block':'none'"> <span>${label}</span></label>`;
+  box.innerHTML=`<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:10px">
+      <div style="font-weight:700;margin-bottom:6px">Xero</div>
+      ${radio('create',`Create as a new contact in Xero <span class="muted">(if Xero already has a contact with exactly this name, that one is used)</span>`,true)}
+      ${radio('existing','Already in Xero under a different name',false)}
+      <div id="xs_existing" style="display:none;margin:2px 0 8px 24px">
+        <div style="display:flex;gap:6px"><input id="xs_name" placeholder="Name exactly as in Xero">${conn?`<button class="btn-ghost" style="width:auto;white-space:nowrap" onclick="xoSearchXero('${conn.entity_code}','xs_name','xs_results')">Search Xero</button>`:''}</div>
+        <div id="xs_results" style="margin-top:6px"></div></div>
+      ${radio('later','Decide later (on the Send to Xero page)',false)}</div>`;
+}
+/* run before saving: returns a problem to show, or '' */
+function xoSetupCheck(){
+  if(!XO_SETUP||!el('xoSetupBox')) return '';
+  const m=(document.querySelector('input[name="xs_mode"]:checked')||{}).value;
+  if(m==='existing'&&!el('xs_name').value.trim()) return 'Enter (or search for) the contact’s name as it appears in Xero, or choose another Xero option.';
+  return '';
+}
+/* run after the client / supplier is saved: returns a warning, or '' */
+async function xoSetupSave(partyType,partyId,onlyEntity){
+  if(!XO_SETUP||!partyId) return '';
+  const m=(document.querySelector('input[name="xs_mode"]:checked')||{}).value||'create';
+  const nm=m==='existing'?(el('xs_name')||{}).value.trim():null;
+  let ents=XO_SETUP.ents.map(e=>e.entity_code); if(onlyEntity&&ents.includes(onlyEntity)) ents=[onlyEntity]; else if(onlyEntity) ents=[];
+  XO_SETUP=null;
+  if(m==='later'||!ents.length) return '';
+  const rows=ents.map(e=>({entity_code:e,party_type:partyType,party_id:partyId,link_mode:m,xero_contact_name:nm,xero_contact_id:m==='existing'?xoPickedId(e,nm):null,updated_at:new Date().toISOString()}));
+  const r=await sb.from('xero_contact_links').insert(rows).select();
+  if(r.error||!r.data||!r.data.length) return 'Saved, but the Xero link wasn’t: '+(r.error?poFriendlyError(r.error):'no permission')+'. You can link it on the Send to Xero page.';
+  if(typeof XO!=='undefined') XO=null;   // Send to Xero page reloads with the new link
+  return '';
 }
 
 /* ---------- Settings ---------- */
@@ -8358,13 +8436,16 @@ function clNewForm(){
         <div class="fld"><label>Status</label><select id="cn_status"><option value="prospect">Prospect — quoting, not yet worked for</option><option value="active">Active</option></select></div>
         <div class="fld"><label>Trading company</label><select id="cn_ent">${clEntityOptions('UK')}</select></div></div>
       <div class="note">You can add the commercial details, sites and contacts on the client’s page next.</div>
+      ${xoSetupHtml()}
     </div>
     <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="cnSave" onclick="clNewSave()">Add client</button></div>
     <div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
   document.body.appendChild(wrap);
+  xoSetupInit('client','cn_name');
 }
 async function clNewSave(){
   const name=val('cn_name').trim(); if(!name) return msg('Enter the client name.','err');
+  const xe=xoSetupCheck(); if(xe) return msg(xe,'err');
   const b=el('cnSave'); b.disabled=true;
   let slug=slugify(name)||('client-'+Date.now());
   if((CLIENTS||[]).some(c=>c.slug===slug)) slug=slug+'-'+String(Date.now()).slice(-4);
@@ -8372,6 +8453,7 @@ async function clNewSave(){
   if(r.error){ b.disabled=false; return msg('Not saved: '+r.error.message,'err'); }
   const u=await sb.from('client_accounts').update({client_status:val('cn_status'), entity_code:val('cn_ent')||'UK'}).eq('client_id',r.data.id);
   if(u.error){ b.disabled=false; return msg('Client added, but its status was not saved: '+u.error.message,'err'); }
+  const xw=await xoSetupSave('client',r.data.id,val('cn_ent')||'UK'); if(xw) alert(xw);
   closeForm(); await refreshClients(); CLX=null; renderShell(); openClientRecord(r.data.id);
 }
 
@@ -10480,15 +10562,18 @@ function supNewForm(){
   wrap.innerHTML=`<div class="modal" style="max-width:560px"><div class="modal-h"><h3>Add supplier</h3><button class="modal-x" onclick="closeForm()">✕</button></div>
     <div class="modal-b"><div class="fld"><label>Name <span class="req">*</span></label><input id="sn_name"></div>
       <div class="frow"><div class="fld"><label>Type</label><select id="sn_type">${SUP_TYPES2.map(t=>`<option value="${t[0]}">${t[1]}</option>`).join('')}</select></div><div class="fld"><label>Contact name</label><input id="sn_cn"></div></div>
-      <div class="frow"><div class="fld"><label>Contact email</label><input id="sn_em" type="email"></div><div class="fld"><label>Phone</label><input id="sn_ph"></div></div></div>
+      <div class="frow"><div class="fld"><label>Contact email</label><input id="sn_em" type="email"></div><div class="fld"><label>Phone</label><input id="sn_ph"></div></div>${xoSetupHtml()}</div>
     <div class="modal-foot"><button class="btn-ghost" onclick="closeForm()">Cancel</button><button class="btn" id="snSave" onclick="supNewSave()">Add supplier</button></div><div class="savemsg" id="saveMsg" style="padding-bottom:14px"></div></div>`;
   document.body.appendChild(wrap);
+  xoSetupInit('supplier','sn_name');
 }
 async function supNewSave(){
   const v=k=>el(k).value.trim(); if(!v('sn_name')) return msg('Enter the name.','err');
+  const xe=xoSetupCheck(); if(xe) return msg(xe,'err');
   el('snSave').disabled=true;
   const r=await sb.from('suppliers').insert({name:v('sn_name'), supplier_type:v('sn_type'), contact_name:v('sn_cn')||null, contact_email:v('sn_em')||null, contact_phone:v('sn_ph')||null, status:'Active'}).select().single();
   if(r.error){ el('snSave').disabled=false; return msg('Not saved: '+r.error.message,'err'); }
+  const xw=await xoSetupSave('supplier',r.data.id); if(xw) alert(xw);
   closeForm(); await loadSuppliers(); openSupplierRecord(r.data.id);
 }
 
