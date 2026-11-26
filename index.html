@@ -7624,7 +7624,7 @@ function xoQueueHtml(history){
       return `<tr><td><b>${esc(i.ref)}</b><div class="muted" style="font-size:11.5px">${esc(i.entity_code)}</div></td><td style="font-size:12.5px">${i.xero_kind==='credit_note'||(!i.xero_kind&&Number(i.amount)<0&&['invoice','bill'].includes(i.item_type))?(i.item_type==='bill'?'Supplier credit note':'Credit note'):esc(type(i.item_type))}${i.origin==='xero'?'<div class="muted" style="font-size:11px">raised in Xero</div>':''}</td><td>${esc(i.party_name||'')}</td>
         <td style="text-align:right">${i.item_type==='po_billed'?'':jobMoney(i.amount,i.currency)}</td><td><span class="chip ${s[1]}">${s[0]}</span>${wait}${i.xero_number?`<div style="font-size:12px">Xero ${esc(i.xero_number)}${i.xero_status&&i.status!=='withdrawn'?' · '+esc(XO_XSTATUS[i.xero_status]||i.xero_status):''}</div>`:''}${i.error?`<div style="color:var(--red);font-size:12px">${esc(i.error)}</div>`:''}${i.reason?`<div class="muted" style="font-size:12px">${esc(i.reason)}</div>`:''}</td>
         <td style="font-size:12px">${esc(xoUser(i.queued_by))}<div class="muted">${jobDate(i.queued_at)}${i.closed_at?' → '+jobDate(i.closed_at)+' '+esc(xoUser(i.closed_by)):''}</div></td>
-        <td style="white-space:nowrap">${can&&['sent','in_xero'].includes(i.status)&&i.xero_id&&['invoice','bill'].includes(i.item_type)&&!['AUTHORISED','PAID'].includes(i.xero_status)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoCancel('${i.id}','${esc(i.ref).replace(/'/g,'')}')">Cancel in Xero</button>`:''}${can&&['queued','failed'].includes(i.status)||(can&&i.status==='in_xero'&&!i.xero_id)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoWithdraw('${i.id}','${i.status}')">${i.status==='in_xero'?'Undo':'Take back'}</button>`:''}</td></tr>`; }).join('')}</tbody></table></div>`;
+        <td style="white-space:nowrap">${can&&['sent','in_xero'].includes(i.status)&&i.xero_id&&['invoice','bill'].includes(i.item_type)&&!['AUTHORISED','PAID'].includes(i.xero_status)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoCancel('${i.id}','${esc(i.ref).replace(/'/g,'')}')">Cancel in Xero</button>`:''}${can&&i.status==='failed'?`<button class="btn" style="width:auto;padding:4px 10px;margin-right:4px" ${XO_RUNNING?'disabled':''} onclick="xoRetry('${i.id}','${esc(i.ref).replace(/'/g,'')}')">Retry</button>`:''}${can&&['queued','failed'].includes(i.status)||(can&&i.status==='in_xero'&&!i.xero_id)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoWithdraw('${i.id}','${i.status}')">${i.status==='in_xero'?'Undo':'Take back'}</button>`:''}</td></tr>`; }).join('')}</tbody></table></div>`;
 }
 /* ---------- Send now / Check Xero / Cancel in Xero (Phase 5b–5c) ----------
    All run the "xero-sender" back-room function:
@@ -7690,6 +7690,15 @@ function xoCancel(id,ref){
   const reason=prompt(`Cancel ${ref} in Xero?\n\nThis deletes the DRAFT in Xero and puts it back in Mercury so it can be corrected and sent again. It only works while it is still a draft (or awaiting approval) in Xero.\n\nReason:`);
   if(reason===null) return; if(!reason.trim()){ alert('A reason is needed.'); return; }
   xoRun('cancel',{itemId:id,reason:reason.trim()});
+}
+/* Retry a failed item: rebuilt from the latest details, back in the queue, then sent */
+async function xoRetry(id,ref){
+  if(XO_RUNNING) return;
+  const others=XO.items.filter(i=>i.status==='queued').length;
+  if(!confirm(`Retry ${ref}?\n\nIt is rebuilt from the latest details in Mercury and sent to Xero now${others?` (together with the ${others} other item${others===1?'':'s'} already waiting)`:''}. The failed attempt is kept in Sent & history.`)) return;
+  const r=await sb.rpc('xero_retry',{p_item:id});
+  if(r.error){ XO_RUN={ok:false,message:'Could not retry: '+poFriendlyError(r.error)}; XO=null; go('xero'); return; }
+  xoRun('send',{});
 }
 async function xoConnect(e){
   if(!confirm(`Connect ${e} to Xero?\n\nYou'll be taken to Xero to sign in. The person signing in must be an admin of ${e}'s Xero organisation. Choose ONLY the ${e} organisation, then click Allow access. You'll come back here afterwards.`)) return;
