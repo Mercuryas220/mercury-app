@@ -7510,7 +7510,7 @@ async function loadXero(){
     if(!JOBREG_ENTITIES.length){ const e=await sb.from('trading_entities').select('*').order('code'); JOBREG_ENTITIES=e.data||[]; }
     const [outbox,items,links,settings,sups,codes]=await Promise.all([
       jobFetchAll(()=>sb.from('xero_outbox').select('*').order('item_date')),
-      jobFetchAll(()=>sb.from('xero_sync_items').select('id,entity_code,item_type,source_id,job_id,ref,party_name,amount,currency,status,queued_at,queued_by,sent_at,xero_id,xero_number,xero_kind,xero_status,origin,error,reason,closed_at,closed_by').order('queued_at',{ascending:false})),
+      jobFetchAll(()=>sb.from('xero_sync_items').select('id,entity_code,item_type,source_id,job_id,ref,party_name,amount,currency,status,queued_at,queued_by,sent_at,xero_id,xero_number,xero_kind,xero_status,origin,checked_at,error,reason,closed_at,closed_by').order('queued_at',{ascending:false})),
       jobFetchAll(()=>sb.from('xero_contact_links').select('*')),
       sb.from('xero_settings').select('*').order('entity_code').then(r=>{ if(r.error) throw r.error; return r.data||[]; }),
       jobFetchAll(()=>sb.from('suppliers').select('id,name,status').order('name')),
@@ -7623,7 +7623,7 @@ function xoQueueHtml(history){
       const wait=i.status==='queued'&&!xoConnected(i.entity_code)?'<div class="muted" style="font-size:11.5px">Waiting for the Xero connection</div>':'';
       return `<tr><td><b>${esc(i.ref)}</b><div class="muted" style="font-size:11.5px">${esc(i.entity_code)}</div></td><td style="font-size:12.5px">${i.xero_kind==='credit_note'||(!i.xero_kind&&Number(i.amount)<0&&['invoice','bill'].includes(i.item_type))?(i.item_type==='bill'?'Supplier credit note':'Credit note'):esc(type(i.item_type))}${i.origin==='xero'?'<div class="muted" style="font-size:11px">raised in Xero</div>':''}</td><td>${esc(i.party_name||'')}</td>
         <td style="text-align:right">${i.item_type==='po_billed'?'':jobMoney(i.amount,i.currency)}</td><td><span class="chip ${s[1]}">${s[0]}</span>${wait}${i.xero_number?`<div style="font-size:12px">Xero ${esc(i.xero_number)}${i.xero_status&&i.status!=='withdrawn'?' · '+esc(XO_XSTATUS[i.xero_status]||i.xero_status):''}</div>`:''}${i.error?`<div style="color:var(--red);font-size:12px">${esc(i.error)}</div>`:''}${i.reason?`<div class="muted" style="font-size:12px">${esc(i.reason)}</div>`:''}</td>
-        <td style="font-size:12px">${esc(xoUser(i.queued_by))}<div class="muted">${jobDate(i.queued_at)}${i.closed_at?' → '+jobDate(i.closed_at)+' '+esc(xoUser(i.closed_by)):''}</div></td>
+        <td style="font-size:12px;white-space:nowrap">${xoWhoWhen(i)}</td>
         <td style="white-space:nowrap">${can&&['sent','in_xero'].includes(i.status)&&i.xero_id&&['invoice','bill'].includes(i.item_type)&&!['AUTHORISED','PAID'].includes(i.xero_status)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoCancel('${i.id}','${esc(i.ref).replace(/'/g,'')}')">Cancel in Xero</button>`:''}${can&&i.status==='failed'?`<button class="btn" style="width:auto;padding:4px 10px;margin-right:4px" ${XO_RUNNING?'disabled':''} onclick="xoRetry('${i.id}','${esc(i.ref).replace(/'/g,'')}')">Retry</button>`:''}${can&&['queued','failed'].includes(i.status)||(can&&i.status==='in_xero'&&!i.xero_id)?`<button class="btn-ghost" style="padding:4px 8px" onclick="xoWithdraw('${i.id}','${i.status}')">${i.status==='in_xero'?'Undo':'Take back'}</button>`:''}</td></tr>`; }).join('')}</tbody></table></div>`;
 }
 /* ---------- Send now / Check Xero / Cancel in Xero (Phase 5b–5c) ----------
@@ -7633,6 +7633,17 @@ function xoQueueHtml(history){
      cancel – deletes a draft in Xero and puts it back in Mercury to resend
    Accounts only (xero.send). Connect/Disconnect use "xero-auth" (Directors). */
 let XO_RUN=null, XO_RUNNING=false, XO_NOTICE=null, XO_RETURN_DONE=false;
+/* date + time, in the viewer's own time zone: 26/11/2026 10:32 */
+function xoWhen(ts){ if(!ts) return ''; const d=new Date(ts); if(isNaN(d)) return jobDate(ts); return d.toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).replace(',',''); }
+/* who did what, and when, for one queue / history row */
+function xoWhoWhen(i){
+  const line=(label,ts,who)=>ts?`<div><span class="muted">${label}</span> ${xoWhen(ts)}${who?' · '+esc(xoUser(who)):''}</div>`:'';
+  const closedLabel={withdrawn:i.reason==='Retried'?'Retried':(/in Xero/i.test(i.reason||'')?'Removed':'Taken back'),in_xero:i.origin==='xero'?'Picked up from Xero':'Marked as in Xero'}[i.status]||'Closed';
+  return line('Queued',i.queued_at,i.queued_by)
+    +line('Sent to Xero',i.sent_at,null)
+    +(i.closed_at?line(closedLabel,i.closed_at,i.closed_by||null):'')
+    +(i.checked_at&&i.status==='sent'?line('Last checked',i.checked_at,null):'');
+}
 const XO_XSTATUS={DRAFT:'Draft in Xero',SUBMITTED:'Awaiting approval',AUTHORISED:'Approved',PAID:'Paid',BILLED:'Billed',DELETED:'Deleted',VOIDED:'Voided'};
 function xoSendNowHtml(){
   if(!jobCan('xero.send')) return '';
