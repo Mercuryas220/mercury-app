@@ -7321,7 +7321,6 @@ async function jobLoadBilling(j){
     if(x.status==='ready') b.push(`<button class="btn-ghost" style="padding:4px 8px" onclick="billSetStatus('${x.id}','planned')">Not yet</button>`);
     if(['planned','ready'].includes(x.status) && (x.stage_type!=='final'||done)) b.push(`<button class="btn" style="padding:4px 10px" onclick="billInvoiceForm('${x.id}')">Record Xero invoice</button>`);
     if(['planned','ready'].includes(x.status)) b.push(`${x.stage_type==='hours'?'':`<button class="btn-ghost" style="padding:4px 8px" onclick="billEditForm('${x.id}')">Edit</button>`}<button class="btn-ghost" style="padding:4px 8px;color:var(--red)" onclick="billCancel('${x.id}')">Cancel</button>`);
-    if(x.status==='invoiced') b.push(`<button class="btn-ghost" style="padding:4px 8px" onclick="billPayment('${x.id}')">Payment</button>`);
     return `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${b.join('')}</div>`; };
   const linesBtn=x=>x.stage_type==='hours'?`<button class="edit-btn" style="margin-top:3px" onclick="hbLines('${x.id}')">Lines</button>`:'';
   const rows=BILL.stages.map(x=>`<tr style="${x.status==='cancelled'?'opacity:.55':''}"><td>${x.stage_seq}</td>
@@ -7533,7 +7532,7 @@ function pageXero(){
   const queued=XO.items.filter(i=>['queued','sending','failed'].includes(i.status)).length;
   const tab=(k,l,n)=>`<button class="${XO_TAB===k?'btn':'btn-ghost'}" style="width:auto;padding:7px 14px" onclick="XO_TAB='${k}';go('xero')">${l}${n?` <span class="nav-badge" style="position:static;margin-left:4px">${n}</span>`:''}</button>`;
   const anyConn=on.some(s=>s.connected_at);
-  const head=`<div class="sechead"><h3>🔄 Send to Xero</h3><span class="sub">Check each item, tick it, then send. Nothing goes to Xero automatically.</span><span class="line"></span>${jobCan('xero.send')&&anyConn?`<button class="btn-ghost" ${XO_RUNNING?'disabled':''} onclick="xoRun('sync',{},'Check Xero now for payments, deletions, amount changes and credit notes?')" title="Also runs automatically every night">Check Xero now</button>`:''}<button class="btn-ghost" onclick="xoReload()">Refresh</button></div>
+  const head=`<div class="sechead"><h3>🔄 Send to Xero</h3><span class="sub">Check each item, tick it, then send. Nothing goes to Xero automatically.</span><span class="line"></span>${jobCan('xero.send')&&anyConn?`<button class="btn-ghost" ${XO_RUNNING?'disabled':''} onclick="xoRun('sync',{},'Check Xero now for payments, deletions, amount changes and credit notes?')" title="Also runs automatically every 15 minutes">Check Xero now</button>`:''}<button class="btn-ghost" onclick="xoReload()">Refresh</button></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${conn}</div>${xoNoticeHtml()}${xoResultHtml()}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${tab('check','To check',XO.outbox.length)}${tab('queue','Queued',queued)}${tab('done','Sent & history')}${tab('contacts','Xero contacts')}${tab('settings','Settings')}</div>`;
   let body='';
@@ -7629,7 +7628,7 @@ function xoQueueHtml(history){
 /* ---------- Send now / Check Xero / Cancel in Xero (Phase 5b–5c) ----------
    All run the "xero-sender" back-room function:
      send   – delivers every queued item to Xero (drafts; negatives as credit notes)
-     sync   – picks up changes made in Xero (also runs every night at 02:20)
+     sync   – picks up changes made in Xero (also runs automatically every 15 minutes)
      cancel – deletes a draft in Xero and puts it back in Mercury to resend
    Accounts only (xero.send). Connect/Disconnect use "xero-auth" (Directors). */
 let XO_RUN=null, XO_RUNNING=false, XO_NOTICE=null, XO_RETURN_DONE=false;
